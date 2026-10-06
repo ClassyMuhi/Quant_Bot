@@ -1,0 +1,19 @@
+# Environment variables
+.env
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Data and logs
+*.log
+
+# Submodules / Cloned repositories
+finrl_trading_repo/
+
