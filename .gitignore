@@ -13,6 +13,8 @@ __pycache__/
 
 # Data and logs
 *.log
+data/**/*.parquet
+!data/**/.gitkeep
 
 # Submodules / Cloned repositories
 finrl_trading_repo/
