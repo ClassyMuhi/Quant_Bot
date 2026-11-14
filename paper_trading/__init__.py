@@ -7,6 +7,7 @@ from paper_trading.portfolio import PaperPortfolio
 from paper_trading.order_manager import OrderManager, PaperOrder
 from paper_trading.paper_broker import LocalPaperBroker, PaperExecutionGateway, SIMULATED_EXECUTION_NOTICE
 from paper_trading.order_monitor import PositionMonitor, TriggerEvent
+from paper_trading.autopilot import AutoPilotConfig, IntradayAutoPilot, ScanLogEntry
 
 __all__ = [
     "PositionSizer",
@@ -19,5 +20,7 @@ __all__ = [
     "SIMULATED_EXECUTION_NOTICE",
     "PositionMonitor",
     "TriggerEvent",
+    "AutoPilotConfig",
+    "IntradayAutoPilot",
+    "ScanLogEntry",
 ]
-

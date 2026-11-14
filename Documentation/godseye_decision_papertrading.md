@@ -116,6 +116,20 @@ Designed with a dark zinc aesthetic (`#09090b`):
 - **God's Eye Feed:** Real-time news table with sentiment pills and manual ingestion trigger.
 - **Backtest Lab:** Integrated simulation runner comparing strategy metrics against Buy & Hold.
 
+### 3.7 Intraday Systematic Auto-Pilot (`paper_trading/autopilot.py`)
+Provides autonomous intraday scanning and risk-managed paper trade execution:
+- **Allocated Capital Pool:** User specifies the maximum capital the bot is permitted to allocate to intraday trades.
+- **Frequency Interval (Min 10 Minutes):** Periodic scheduled scanning loop (10m, 15m, 20m, 30m, 60m) to allow proper bar formation and prevent high-churn transaction decay.
+- **Configurable Trading Window:** User defines the Daily Start Time (e.g., 09:15 AM IST) and Daily End Time Cutoff (e.g., 03:15 PM IST).
+- **Mandatory 03:20 PM IST Auto-Square-Off:** Enforces automatic closure of all open intraday positions prior to market close, eliminating overnight holding risk.
+- **Automated Workflow:**
+  1. Ingests fresh God's Eye intelligence.
+  2. Scans configured universe with the Decision Engine.
+  3. Filters for high-conviction signals ($\ge 60\%$ confidence).
+  4. Sizes integer shares within allocated capital constraints.
+  5. Monitors Stop-Loss / Target exits.
+  6. Emits telemetric scan logs in a dedicated Hallmark UI tab.
+
 ---
 
 ## 4. Verification and Test Results

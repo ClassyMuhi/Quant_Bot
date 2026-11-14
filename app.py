@@ -21,6 +21,7 @@ from paper_trading.position_sizer import PositionSizer
 from paper_trading.order_manager import OrderManager
 from paper_trading.paper_broker import LocalPaperBroker, PaperExecutionGateway, SIMULATED_EXECUTION_NOTICE
 from paper_trading.order_monitor import PositionMonitor
+from paper_trading.autopilot import AutoPilotConfig, IntradayAutoPilot, ScanLogEntry
 from backtest.engine import BacktestEngine
 from backtest.strategy import SMACrossoverStrategy, RSIMeanReversionStrategy
 from backtest.cost_model import IndianEquityCostModel
@@ -263,8 +264,9 @@ with col_h2:
     st.markdown(f"<div style='text-align: right;'><span class='pill-mode'>MODE: {gateway.mode_label}</span></div>", unsafe_allow_html=True)
 
 # Main Navigation Tabs
-tab_paper, tab_decision, tab_godseye, tab_backtest = st.tabs([
+tab_paper, tab_autopilot, tab_decision, tab_godseye, tab_backtest = st.tabs([
     "📈 Paper Trading Terminal",
+    "🤖 Intraday Auto-Pilot",
     "🧠 Decision Engine",
     "👁️ God's Eye Intelligence",
     "📊 Backtest Lab",
@@ -496,7 +498,247 @@ with tab_paper:
 
 
 # -------------------------------------------------------------
-# TAB 2: DECISION ENGINE
+# TAB 2: INTRADAY AUTO-PILOT
+# -------------------------------------------------------------
+with tab_autopilot:
+    st.markdown("#### 🤖 Intraday Systematic Auto-Pilot")
+    st.caption("Autonomous multi-stock intraday scanning and paper execution engine (Minimum 10-minute cycle)")
+
+    if "autopilot_active" not in st.session_state:
+        st.session_state.autopilot_active = False
+
+    col_cfg, col_telemetry = st.columns([1.1, 1.3])
+
+    with col_cfg:
+        st.markdown("<div class='zinc-card'>", unsafe_allow_html=True)
+        st.markdown("##### ⚙️ Auto-Pilot Parameters")
+
+        # 1. Amount User Willing to Put In
+        auto_capital = st.number_input(
+            "Capital Allocated to Auto-Pilot (₹)",
+            min_value=10000.0,
+            max_value=10000000.0,
+            value=100000.0,
+            step=10000.0,
+            help="Total cash budget the auto-pilot is allowed to deploy into intraday positions."
+        )
+
+        # 2. Frequency Time (Strict Minimum 10 Mins)
+        freq_option = st.selectbox(
+            "Scan & Trade Frequency",
+            ["10 Minutes", "15 Minutes", "20 Minutes", "30 Minutes", "45 Minutes", "60 Minutes"],
+            index=0,
+            help="Enforces a minimum interval of 10 minutes to allow market price formation and prevent excessive churn."
+        )
+        freq_mins = int(freq_option.split()[0])
+
+        # 3. Execution Window: Start to End Time
+        w_c1, w_c2 = st.columns(2)
+        with w_c1:
+            start_time_opt = st.selectbox(
+                "Daily Start Time (IST)",
+                ["09:15 AM", "09:30 AM", "10:00 AM", "10:30 AM"],
+                index=0,
+                help="When the Auto-Pilot begins scanning for new intraday entry setups."
+            )
+        with w_c2:
+            end_time_opt = st.selectbox(
+                "Daily End Time / Cutoff (IST)",
+                ["02:30 PM", "02:45 PM", "03:00 PM", "03:15 PM"],
+                index=3,
+                help="Cutoff time after which NO new intraday positions will be opened."
+            )
+
+        start_hh_mm = {
+            "09:15 AM": "09:15", "09:30 AM": "09:30", "10:00 AM": "10:00", "10:30 AM": "10:30"
+        }[start_time_opt]
+        end_hh_mm = {
+            "02:30 PM": "14:30", "02:45 PM": "14:45", "03:00 PM": "15:00", "03:15 PM": "15:15"
+        }[end_time_opt]
+
+        st.markdown(
+            "<div style='font-size: 0.78rem; color: #a1a1aa; margin-top: 4px;'>"
+            "🛡️ <b>Mandatory Square-off:</b> Open intraday positions will automatically close at <b>03:20 PM IST</b>."
+            "</div>",
+            unsafe_allow_html=True
+        )
+
+        st.divider()
+
+        # Risk Controls
+        r_c1, r_c2 = st.columns(2)
+        with r_c1:
+            auto_risk_pct = st.slider("Risk Per Trade (%)", min_value=0.5, max_value=3.0, value=1.5, step=0.5)
+        with r_c2:
+            auto_max_pos = st.selectbox("Max Concurrent Positions", [1, 2, 3, 5], index=2)
+
+        min_conf = st.slider("Min Signal Confidence Threshold", min_value=0.50, max_value=0.90, value=0.60, step=0.05)
+
+        # Initialize / Update AutoPilot Object
+        ap_config = AutoPilotConfig(
+            allocated_capital=auto_capital,
+            frequency_minutes=freq_mins,
+            start_time_str=start_hh_mm,
+            end_time_str=end_hh_mm,
+            square_off_time_str="15:20",
+            risk_per_trade_pct=auto_risk_pct,
+            max_active_positions=auto_max_pos,
+            min_confidence=min_conf,
+        )
+
+        if "autopilot" not in st.session_state:
+            st.session_state.autopilot = IntradayAutoPilot(
+                config=ap_config,
+                portfolio=portfolio,
+                universe=universe,
+                godseye=godseye,
+                decision_engine=decision_engine,
+            )
+        else:
+            st.session_state.autopilot.config = ap_config
+
+        pilot = st.session_state.autopilot
+
+        st.divider()
+
+        # Main Activation Toggle
+        btn_c1, btn_c2 = st.columns(2)
+        with btn_c1:
+            if not st.session_state.autopilot_active:
+                if st.button("▶️ Activate Auto-Pilot", type="primary", use_container_width=True):
+                    st.session_state.autopilot_active = True
+                    pilot.is_running = True
+                    cycle_res = pilot.execute_cycle(price_lookup_func=get_current_stock_quote)
+                    st.success(f"Auto-Pilot Activated! Executed Cycle #{cycle_res['cycle_number']}")
+                    st.rerun()
+            else:
+                if st.button("⏹️ Stop Auto-Pilot", type="secondary", use_container_width=True):
+                    st.session_state.autopilot_active = False
+                    pilot.is_running = False
+                    st.warning("Auto-Pilot Paused.")
+                    st.rerun()
+
+        with btn_c2:
+            if st.button("⚡ Run Scan Cycle Now", use_container_width=True):
+                cycle_res = pilot.execute_cycle(price_lookup_func=get_current_stock_quote)
+                st.info(f"Manual scan complete: {cycle_res['trades_placed']} trades placed.")
+                st.rerun()
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with col_telemetry:
+        st.markdown("<div class='zinc-card'>", unsafe_allow_html=True)
+        st.markdown("##### 📡 Live Auto-Pilot Telemetry")
+
+        ist_now = pilot.get_ist_now()
+        is_window, win_msg = pilot.is_within_trading_window(ist_now)
+
+        if st.session_state.autopilot_active:
+            status_html = "<span class='pill-bullish'>● ACTIVE (SYSTEMATIC POLLING)</span>"
+        else:
+            status_html = "<span class='pill-neutral'>○ STANDBY (STOPPED)</span>"
+
+        t_c1, t_c2 = st.columns([1.5, 1])
+        with t_c1:
+            st.markdown(f"**Engine Status:** {status_html}", unsafe_allow_html=True)
+            st.caption(f"Current IST Time: **{ist_now.strftime('%I:%M:%S %p')}** | Window: {win_msg}")
+        with t_c2:
+            st.metric("Total Cycles Executed", pilot.cycle_count)
+
+        st.divider()
+
+        intraday_invested = sum(
+            p["quantity"] * p.get("current_price", p["avg_price"])
+            for p in portfolio.holdings.values()
+            if p.get("trading_style") == "INTRADAY"
+        )
+        remaining_cap = max(0.0, auto_capital - intraday_invested)
+
+        m_c1, m_c2, m_c3 = st.columns(3)
+        with m_c1:
+            st.metric("Allocated Budget", f"₹{auto_capital:,.2f}")
+        with m_c2:
+            st.metric("Currently Deployed", f"₹{intraday_invested:,.2f}")
+        with m_c3:
+            st.metric("Available Pool", f"₹{remaining_cap:,.2f}")
+
+        st.divider()
+        if pilot.next_cycle_time:
+            st.markdown(f"**Next Scheduled Scan:** `{pilot.next_cycle_time.strftime('%I:%M:%S %p IST')}` (every {freq_mins} mins)")
+        else:
+            st.markdown(f"**Scan Interval:** Every `{freq_mins} minutes` (Starts upon activation)")
+
+        st.markdown(
+            f"<div class='disclaimer-box'>"
+            f"<b>⚙️ Auto-Pilot Protocol:</b> At each {freq_mins}-min interval, the bot refreshes God's Eye market news, "
+            f"scans the NSE universe for high-confidence confluence signals (&ge;{min_conf:.0%}), sizes risk-managed integer shares, "
+            f"routes paper orders automatically, and guarantees 03:20 PM IST auto-square-off."
+            f"</div>",
+            unsafe_allow_html=True
+        )
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # Active Intraday Holdings & Square-off
+    st.markdown("---")
+    ih_c1, ih_c2 = st.columns([2, 1])
+    with ih_c1:
+        st.markdown("##### 💼 Active Auto-Pilot Intraday Positions")
+    with ih_c2:
+        if st.button("🚨 Emergency Square-Off All Intraday", use_container_width=True):
+            closed = pilot.square_off_all_intraday(price_lookup_func=get_current_stock_quote)
+            st.warning(f"Squared off {len(closed)} open intraday positions.")
+            st.rerun()
+
+    intraday_holdings = {
+        s: pos for s, pos in portfolio.holdings.items()
+        if pos.get("trading_style") == "INTRADAY"
+    }
+
+    if not intraday_holdings:
+        st.info("No active open intraday positions managed by Auto-Pilot.")
+    else:
+        ap_rows = []
+        for s, pos in intraday_holdings.items():
+            curr_p = get_current_stock_quote(s)
+            qty = pos["quantity"]
+            avg_p = pos["avg_price"]
+            market_val = qty * curr_p
+            unrealized = (curr_p - avg_p) * qty
+            ap_rows.append({
+                "Symbol": s,
+                "Qty": qty,
+                "Avg Entry": f"₹{avg_p:,.2f}",
+                "Current": f"₹{curr_p:,.2f}",
+                "Market Value": f"₹{market_val:,.2f}",
+                "Unrealized P&L": f"₹{unrealized:+,.2f}",
+                "Stop-Loss": f"₹{pos.get('sl_price', 0):,.2f}",
+                "Target": f"₹{pos.get('target_price', 0):,.2f}",
+                "Opened At": pos.get("opened_at", "")[11:19],
+            })
+        render_zinc_table(pd.DataFrame(ap_rows))
+
+    # Real-Time Telemetry & Audit Logs
+    st.markdown("##### 📜 Auto-Pilot Scan & Decision Audit Log")
+    if not pilot.scan_logs:
+        st.info("No scan activity recorded yet. Activate Auto-Pilot or click 'Run Scan Cycle Now'.")
+    else:
+        log_data = []
+        for log in pilot.scan_logs[:20]:
+            log_data.append({
+                "Time (IST)": log.timestamp,
+                "Symbol": log.symbol,
+                "Signal": log.decision,
+                "Score": f"{log.score:+.2f}",
+                "Confidence": f"{log.confidence:.0%}",
+                "Action": log.action,
+                "Details": log.details,
+            })
+        render_zinc_table(pd.DataFrame(log_data), max_height=320)
+
+
+# -------------------------------------------------------------
+# TAB 3: DECISION ENGINE
 # -------------------------------------------------------------
 with tab_decision:
     st.markdown("#### Decision Engine & Technical-Event Confluence")
