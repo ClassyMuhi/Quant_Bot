@@ -37,6 +37,9 @@ class BacktestResult:
             "Metric": [
                 "Initial Capital (Rs)",
                 "Final Capital (Rs)",
+                "Total P&L (Rs)",
+                "Realized P&L (Rs)",
+                "Unrealized P&L (Rs)",
                 "Total Return (%)",
                 "CAGR (%)",
                 "Annualized Volatility (%)",
@@ -44,6 +47,8 @@ class BacktestResult:
                 "Sortino Ratio",
                 "Max Drawdown (%)",
                 "Max Drawdown (Days)",
+                "Trading Days",
+                "Short Period (<6M)",
                 "Total Trades",
                 "Win Rate (%)",
                 "Profit Factor",
@@ -52,6 +57,9 @@ class BacktestResult:
             self.strategy_name: [
                 f"{self.metrics.get('initial_equity', 0):,.2f}",
                 f"{self.metrics.get('final_equity', 0):,.2f}",
+                f"{self.metrics.get('total_pnl', 0):,.2f}",
+                f"{self.metrics.get('realized_pnl', 0):,.2f}",
+                f"{self.metrics.get('unrealized_pnl', 0):,.2f}",
                 f"{self.metrics.get('total_return_pct', 0):.2f}%",
                 f"{self.metrics.get('cagr_pct', 0):.2f}%",
                 f"{self.metrics.get('annualized_volatility_pct', 0):.2f}%",
@@ -59,6 +67,8 @@ class BacktestResult:
                 f"{self.metrics.get('sortino_ratio', 0):.2f}",
                 f"{self.metrics.get('max_drawdown_pct', 0):.2f}%",
                 f"{self.metrics.get('max_drawdown_duration_days', 0)}",
+                f"{self.metrics.get('trading_days', 0)}",
+                "YES (Warning)" if self.metrics.get("is_short_period") else "NO",
                 f"{self.metrics.get('total_trades', 0)}",
                 f"{self.metrics.get('win_rate_pct', 0):.2f}%",
                 f"{self.metrics.get('profit_factor', 0):.2f}",
@@ -67,6 +77,9 @@ class BacktestResult:
             "Buy & Hold (Universe)": [
                 f"{self.buy_hold_metrics.get('initial_equity', 0):,.2f}",
                 f"{self.buy_hold_metrics.get('final_equity', 0):,.2f}",
+                f"{self.buy_hold_metrics.get('total_pnl', 0):,.2f}",
+                f"{self.buy_hold_metrics.get('realized_pnl', 0):,.2f}",
+                f"{self.buy_hold_metrics.get('unrealized_pnl', 0):,.2f}",
                 f"{self.buy_hold_metrics.get('total_return_pct', 0):.2f}%",
                 f"{self.buy_hold_metrics.get('cagr_pct', 0):.2f}%",
                 f"{self.buy_hold_metrics.get('annualized_volatility_pct', 0):.2f}%",
@@ -74,6 +87,8 @@ class BacktestResult:
                 f"{self.buy_hold_metrics.get('sortino_ratio', 0):.2f}",
                 f"{self.buy_hold_metrics.get('max_drawdown_pct', 0):.2f}%",
                 f"{self.buy_hold_metrics.get('max_drawdown_duration_days', 0)}",
+                f"{self.buy_hold_metrics.get('trading_days', 0)}",
+                "YES (Warning)" if self.buy_hold_metrics.get("is_short_period") else "NO",
                 f"{self.buy_hold_metrics.get('total_trades', 0)}",
                 f"{self.buy_hold_metrics.get('win_rate_pct', 0):.2f}%",
                 f"{self.buy_hold_metrics.get('profit_factor', 0):.2f}",
@@ -85,6 +100,9 @@ class BacktestResult:
             data["Benchmark (NIFTY)"] = [
                 f"{self.benchmark_metrics.get('initial_equity', 0):,.2f}",
                 f"{self.benchmark_metrics.get('final_equity', 0):,.2f}",
+                f"{self.benchmark_metrics.get('total_pnl', 0):,.2f}",
+                f"{self.benchmark_metrics.get('realized_pnl', 0):,.2f}",
+                f"{self.benchmark_metrics.get('unrealized_pnl', 0):,.2f}",
                 f"{self.benchmark_metrics.get('total_return_pct', 0):.2f}%",
                 f"{self.benchmark_metrics.get('cagr_pct', 0):.2f}%",
                 f"{self.benchmark_metrics.get('annualized_volatility_pct', 0):.2f}%",
@@ -92,11 +110,15 @@ class BacktestResult:
                 f"{self.benchmark_metrics.get('sortino_ratio', 0):.2f}",
                 f"{self.benchmark_metrics.get('max_drawdown_pct', 0):.2f}%",
                 f"{self.benchmark_metrics.get('max_drawdown_duration_days', 0)}",
+                f"{self.benchmark_metrics.get('trading_days', 0)}",
+                "YES (Warning)" if self.benchmark_metrics.get("is_short_period") else "NO",
                 "-",
                 "-",
                 "-",
                 "-",
             ]
+
+        return pd.DataFrame(data)
 
         return pd.DataFrame(data)
 
@@ -116,6 +138,7 @@ class BacktestEngine:
         valuation_price_col: str = "close", # Value portfolio at t Close price
         risk_free_rate: float = 0.06,       # 6% benchmark rate
         rebalance_cash_buffer: float = 0.02, # Keep 2% cash buffer to avoid over-allocation
+        max_volume_participation_pct: Optional[float] = None, # Optional volume limit (e.g. 0.10 for 10% volume)
     ):
         self.strategy = strategy
         self.initial_capital = initial_capital
@@ -124,6 +147,7 @@ class BacktestEngine:
         self.valuation_price_col = valuation_price_col
         self.risk_free_rate = risk_free_rate
         self.rebalance_cash_buffer = rebalance_cash_buffer
+        self.max_volume_participation_pct = max_volume_participation_pct
 
     def _align_market_data(
         self,
@@ -212,6 +236,9 @@ class BacktestEngine:
             equity_df=strategy_equity_df,
             trades=account.trades,
             risk_free_rate=self.risk_free_rate,
+            initial_capital=self.initial_capital,
+            positions=account.positions,
+            current_prices=today_close_prices,
         )
 
         # Compute Buy & Hold Benchmark of Universe
@@ -250,6 +277,7 @@ class BacktestEngine:
         Executes orders according to signals:
         - First executes SELL orders to liberate cash.
         - Then executes BUY orders with available capital.
+        - Enforces liquidity constraints if max_volume_participation_pct is set.
         """
         sell_orders = []
         buy_orders = []
@@ -267,12 +295,12 @@ class BacktestEngine:
                 continue
 
             if sig.signal_type == SignalType.SELL:
-                sell_orders.append((sym, sig, exec_price))
+                sell_orders.append((sym, sig, exec_price, row))
             elif sig.signal_type == SignalType.BUY:
-                buy_orders.append((sym, sig, exec_price))
+                buy_orders.append((sym, sig, exec_price, row))
 
         # 1. Execute SELLs first
-        for sym, sig, price in sell_orders:
+        for sym, sig, price, row in sell_orders:
             pos = account.get_position(sym)
             if pos.quantity > 0:
                 if sig.target_weight is not None and sig.target_weight > 0:
@@ -281,31 +309,42 @@ class BacktestEngine:
                     target_value = current_equity * sig.target_weight
                     target_qty = int(target_value // price)
                     sell_qty = pos.quantity - target_qty
-                    if sell_qty > 0:
-                        account.execute_order(date, sym, "SELL", sell_qty, price)
                 else:
                     # Full liquidation
-                    account.execute_order(date, sym, "SELL", pos.quantity, price)
+                    sell_qty = pos.quantity
+
+                if sell_qty > 0:
+                    # Apply volume constraint / partial fill if enabled
+                    if self.max_volume_participation_pct is not None and "volume" in row.columns:
+                        day_vol = float(row["volume"].iloc[0])
+                        if day_vol > 0:
+                            max_vol_fill = max(1, int(day_vol * self.max_volume_participation_pct))
+                            sell_qty = min(sell_qty, max_vol_fill)
+                    account.execute_order(date, sym, "SELL", sell_qty, price)
 
         # 2. Execute BUYs
         if buy_orders:
-            # Rebalance allocation calculation
-            for sym, sig, price in buy_orders:
+            for sym, sig, price, row in buy_orders:
                 pos = account.get_position(sym)
                 if sig.target_weight is not None:
                     # Continuous weight target
                     current_equity = account.get_total_equity({sym: price})
                     target_val = current_equity * sig.target_weight * (1.0 - self.rebalance_cash_buffer)
                     target_qty = int(target_val // price)
-                    delta_qty = target_qty - pos.quantity
-                    if delta_qty > 0:
-                        account.execute_order(date, sym, "BUY", delta_qty, price)
+                    buy_qty = target_qty - pos.quantity
                 else:
                     # Discrete BUY signal: allocate equal slice of available cash
                     slice_cash = account.cash / float(len(buy_orders))
                     buy_qty = int((slice_cash * (1.0 - self.rebalance_cash_buffer)) // price)
-                    if buy_qty > 0:
-                        account.execute_order(date, sym, "BUY", buy_qty, price)
+
+                if buy_qty > 0:
+                    # Apply volume constraint / partial fill if enabled
+                    if self.max_volume_participation_pct is not None and "volume" in row.columns:
+                        day_vol = float(row["volume"].iloc[0])
+                        if day_vol > 0:
+                            max_vol_fill = max(1, int(day_vol * self.max_volume_participation_pct))
+                            buy_qty = min(buy_qty, max_vol_fill)
+                    account.execute_order(date, sym, "BUY", buy_qty, price)
 
     def _simulate_buy_and_hold(
         self,
@@ -350,6 +389,9 @@ class BacktestEngine:
             equity_df=bh_equity_df,
             trades=bh_account.trades,
             risk_free_rate=self.risk_free_rate,
+            initial_capital=self.initial_capital,
+            positions=bh_account.positions,
+            current_prices=prices,
         )
         return bh_equity_df, bh_metrics
 
@@ -378,5 +420,7 @@ class BacktestEngine:
             equity_df=b_df,
             trades=[],
             risk_free_rate=self.risk_free_rate,
+            initial_capital=self.initial_capital,
         )
+        return b_df, metrics
         return b_df, metrics

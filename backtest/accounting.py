@@ -88,6 +88,18 @@ class PortfolioAccount:
             self.positions[sym] = Position(symbol=sym)
         return self.positions[sym]
 
+    def get_realized_pnl(self) -> float:
+        """Total cumulative realized profit/loss from all closed sell trades."""
+        return sum(t.realized_pnl for t in self.trades if t.order_type == "SELL")
+
+    def get_unrealized_pnl(self, current_prices: Dict[str, float]) -> float:
+        """Total current mark-to-market unrealized profit/loss across all open holdings."""
+        total = 0.0
+        for sym, pos in self.positions.items():
+            if pos.is_open and sym in current_prices:
+                total += pos.unrealized_pnl(current_prices[sym])
+        return total
+
     def get_invested_value(self, current_prices: Dict[str, float]) -> float:
         """Total current market value of all open positions."""
         total = 0.0

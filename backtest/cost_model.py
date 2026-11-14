@@ -138,11 +138,11 @@ class IndianEquityCostModel(CostModel):
         # 4. Exchange Transaction Fee (0.00325%)
         exchange_fee = gross_value * self.exchange_fee_pct
 
-        # 5. GST (18% on brokerage + exchange fee)
-        gst = (brokerage + exchange_fee) * self.gst_pct
-
-        # 6. SEBI Charges (0.0001%)
+        # 5. SEBI Charges (0.0001% = Rs. 10 per crore)
         sebi_charges = gross_value * self.sebi_charges_pct
+
+        # 6. GST (18% on Brokerage + Exchange Fee + SEBI Charges)
+        gst = (brokerage + exchange_fee + sebi_charges) * self.gst_pct
 
         # 7. Stamp Duty (0.015% on BUY only)
         stamp_duty = (gross_value * self.stamp_duty_pct) if otype == "BUY" else 0.0

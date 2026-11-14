@@ -3,6 +3,7 @@ pandas>=2.0.0
 python-dotenv>=1.0.0
 yfinance>=0.2.35
 duckdb>=0.9.0
-pyarrow>=14.0.0
+# pyarrow omitted: duckdb handles high-performance Parquet I/O without Windows AppLocker DLL restrictions
 pytest>=7.4.0
 python-docx>=1.1.0
+streamlit>=1.30.0
