@@ -299,3 +299,4 @@ class IntradayAutoPilot:
         self.scan_logs.insert(0, entry)
         if len(self.scan_logs) > 100:
             self.scan_logs.pop()
+
