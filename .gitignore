@@ -13,6 +13,7 @@ __pycache__/
 
 # Data and logs
 *.log
+data/sync_state.json
 data/**/*.parquet
 data/news/bronze/*.json
 data/paper_trading/paper_account.json
