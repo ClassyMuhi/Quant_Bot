@@ -39,6 +39,13 @@ gateway = PaperExecutionGateway(portfolio=portfolio)
 decision_engine = DecisionEngine()
 pilot = get_global_autopilot(config=AutoPilotConfig(allocated_capital=100000.0), portfolio=portfolio)
 
+# Auto-sync live portfolio balance from MegaBull on startup
+if gateway.megabull_client:
+    try:
+        gateway.sync_portfolio_from_megabull()
+    except Exception as e:
+        logger.warning(f"Initial MegaBull sync warning: {e}")
+
 # Real-time Activity Event Buffer
 ACTIVITY_LOGS: list[dict[str, Any]] = []
 
@@ -91,6 +98,8 @@ async def api_state(request):
         try:
             mb_profile = gateway.megabull_client.get_user_profile()
             mb_positions = gateway.megabull_client.get_positions()
+            if isinstance(mb_profile, dict) and "virtualMoneyLeft" in mb_profile:
+                portfolio.cash = float(mb_profile["virtualMoneyLeft"])
         except Exception as e:
             logger.warning(f"Error fetching MegaBull state: {e}")
 
@@ -328,11 +337,16 @@ async def api_orders(request):
         })
 
     mb_orders = {"open": [], "executed": []}
+    live_cash = portfolio.cash
     if gateway.megabull_client:
         try:
             mb_data = gateway.megabull_client.get_orders()
             if isinstance(mb_data, dict):
                 mb_orders = mb_data
+            prof = gateway.megabull_client.get_user_profile()
+            if isinstance(prof, dict) and "virtualMoneyLeft" in prof:
+                live_cash = float(prof["virtualMoneyLeft"])
+                portfolio.cash = live_cash
         except Exception as e:
             logger.warning(f"Error fetching MegaBull orders: {e}")
 
@@ -350,7 +364,7 @@ async def api_orders(request):
             "gross_loss": round(gross_loss, 2),
             "total_taxes_and_charges": round(total_taxes, 2),
             "net_pnl": round(total_realized_pnl, 2),
-            "cash_balance": round(portfolio.cash, 2),
+            "cash_balance": round(live_cash, 2),
         },
         "trades": enriched_trades,
         "megabull_orders": mb_orders,
