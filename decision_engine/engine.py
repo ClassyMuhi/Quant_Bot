@@ -113,6 +113,21 @@ class DecisionEngine:
 
         # 5. Price and Risk Levels
         exec_price = current_price or float(indicators.get("close", 0.0))
+
+        # 5a. Intraday Momentum & Day-Open Alignment Guard
+        # Prevents buying into an intraday selloff even if daily indicators were bullish yesterday
+        day_open = float(indicators.get("open", 0.0))
+        if day_open > 0 and exec_price > 0:
+            intraday_return = (exec_price - day_open) / day_open
+            if decision == "BUY" and intraday_return < -0.003:
+                decision = "HOLD"
+                scoring["decision"] = "HOLD"
+                scoring["reason_rule"] += f" (Intraday Momentum Guard: Price ₹{exec_price:.2f} is {abs(intraday_return)*100:.2f}% below day open ₹{day_open:.2f})"
+            elif decision == "SELL" and intraday_return > 0.003:
+                decision = "HOLD"
+                scoring["decision"] = "HOLD"
+                scoring["reason_rule"] += f" (Intraday Momentum Guard: Price ₹{exec_price:.2f} is {intraday_return*100:.2f}% above day open ₹{day_open:.2f})"
+
         entry_price, stop_loss, target_price, risk_err = calculate_entry_sl_target(
             decision=decision,
             current_price=exec_price,

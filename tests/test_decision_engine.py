@@ -149,3 +149,29 @@ def test_decision_engine_stale_or_missing_data():
     assert res.is_actionable is False
     assert "not found" in res.explanation.lower()
 
+
+def test_intraday_momentum_guard():
+    """Verifies that bullish daily indicators are safely suppressed to HOLD if stock is dumping intraday."""
+    engine = DecisionEngine()
+    # Bullish daily indicators: RSI=55, SMA20 > SMA50, MACD positive, Open=2000
+    bullish_indicators = {
+        "open": 2000.0,
+        "close": 2000.0,
+        "rsi_14": 58.0,
+        "sma_20": 2050.0,
+        "sma_50": 1900.0,
+        "macd": 15.0,
+        "macd_signal": 5.0,
+        "volatility_20d": 0.18,
+    }
+
+    # Case 1: Current price is at 2010 (Above open -> Bullish momentum holds)
+    res_healthy = engine.evaluate("TEST_STOCK", override_indicators=bullish_indicators, current_price=2010.0)
+    assert res_healthy.decision == "BUY"
+
+    # Case 2: Current price is at 1980 (1.0% below open -> Intraday selloff!)
+    res_dumping = engine.evaluate("TEST_STOCK", override_indicators=bullish_indicators, current_price=1980.0)
+    assert res_dumping.decision == "HOLD"
+    assert "intraday momentum guard" in res_dumping.explanation.lower()
+
+
