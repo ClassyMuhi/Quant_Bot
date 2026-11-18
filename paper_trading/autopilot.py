@@ -12,6 +12,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, time, timezone, timedelta
 import logging
+import threading
+import time as stdlib_time
 from typing import Any, Dict, List, Optional, Tuple
 
 from pipeline.symbol_universe import SymbolUniverse
@@ -86,6 +88,74 @@ class IntradayAutoPilot:
         self.cycle_count: int = 0
         self.scan_logs: List[ScanLogEntry] = []
         self.active_intraday_orders: List[Dict[str, Any]] = []
+
+        self._worker_thread: Optional[threading.Thread] = None
+        self._stop_event = threading.Event()
+
+    def start(self, price_lookup_func=None) -> None:
+        """
+        Launches the autonomous Auto-Pilot background thread.
+        Runs cycles continuously every `frequency_minutes` without needing UI interaction.
+        """
+        if self.is_running and self._worker_thread and self._worker_thread.is_alive():
+            logger.info("AutoPilot is already running in background thread.")
+            return
+
+        self.is_running = True
+        self._stop_event.clear()
+        self._worker_thread = threading.Thread(
+            target=self._run_loop,
+            args=(price_lookup_func,),
+            daemon=True,
+            name="AutoPilot-WorkerThread"
+        )
+        self._worker_thread.start()
+        logger.info("AutoPilot autonomous background daemon thread successfully started.")
+
+    def stop(self) -> None:
+        """Stops the autonomous background worker loop."""
+        self.is_running = False
+        self._stop_event.set()
+        logger.info("AutoPilot autonomous background worker requested to stop.")
+
+    def _run_loop(self, price_lookup_func=None) -> None:
+        """
+        Continuous background daemon loop:
+        1. Executes initial cycle immediately upon starting.
+        2. Ticks every second; when next_cycle_time arrives, executes cycle automatically.
+        3. Enforces automatic square-off at 03:20 PM IST.
+        """
+        logger.info("AutoPilot background worker loop initialized.")
+        try:
+            self.execute_cycle(price_lookup_func=price_lookup_func)
+        except Exception as e:
+            logger.error("Error during initial AutoPilot cycle: %s", e, exc_info=True)
+
+        while self.is_running and not self._stop_event.is_set():
+            ist_now = self.get_ist_now()
+
+            # 1. Mandatory Market Close Square-Off check
+            if self.is_past_square_off(ist_now):
+                logger.info("Past square-off time (03:20 PM IST). Executing mandatory square-off.")
+                try:
+                    self.square_off_all_intraday(price_lookup_func)
+                except Exception as e:
+                    logger.error("Error during automatic square-off: %s", e)
+                self.stop()
+                break
+
+            # 2. Check if next scheduled cycle time has arrived
+            if self.next_cycle_time and ist_now >= self.next_cycle_time:
+                logger.info("Scheduled cycle interval reached. Executing cycle #%d...", self.cycle_count + 1)
+                try:
+                    self.execute_cycle(price_lookup_func=price_lookup_func)
+                except Exception as e:
+                    logger.error("Error in scheduled AutoPilot cycle: %s", e, exc_info=True)
+
+            # Sleep in 1-second intervals for immediate responsiveness on stop()
+            self._stop_event.wait(1.0)
+
+        logger.info("AutoPilot background worker loop exited.")
 
     def get_ist_now(self) -> datetime:
         """Returns current timestamp in Indian Standard Time (UTC+05:30)."""
@@ -334,4 +404,21 @@ class IntradayAutoPilot:
         self.scan_logs.insert(0, entry)
         if len(self.scan_logs) > 100:
             self.scan_logs.pop()
+
+
+GLOBAL_AUTOPILOT: Optional[IntradayAutoPilot] = None
+
+
+def get_global_autopilot(
+    config: Optional[AutoPilotConfig] = None,
+    portfolio: Optional[PaperPortfolio] = None,
+) -> IntradayAutoPilot:
+    """Returns a shared, persistent singleton AutoPilot instance."""
+    global GLOBAL_AUTOPILOT
+    if GLOBAL_AUTOPILOT is None:
+        cfg = config or AutoPilotConfig()
+        GLOBAL_AUTOPILOT = IntradayAutoPilot(config=cfg, portfolio=portfolio)
+    elif config is not None:
+        GLOBAL_AUTOPILOT.config = config
+    return GLOBAL_AUTOPILOT
 

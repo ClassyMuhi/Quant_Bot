@@ -631,36 +631,26 @@ with tab_autopilot:
             min_confidence=min_conf,
         )
 
-        if "autopilot" not in st.session_state:
-            st.session_state.autopilot = IntradayAutoPilot(
-                config=ap_config,
-                portfolio=portfolio,
-                universe=universe,
-                godseye=godseye,
-                decision_engine=decision_engine,
-            )
-        else:
-            st.session_state.autopilot.config = ap_config
-
-        pilot = st.session_state.autopilot
+        from paper_trading.autopilot import get_global_autopilot
+        pilot = get_global_autopilot(config=ap_config, portfolio=portfolio)
+        pilot.universe = universe
+        pilot.godseye = godseye
+        pilot.decision_engine = decision_engine
 
         st.divider()
 
         # Main Activation Toggle
         btn_c1, btn_c2 = st.columns(2)
         with btn_c1:
-            if not st.session_state.autopilot_active:
+            if not pilot.is_running:
                 if st.button("▶️ Activate Auto-Pilot", type="primary", use_container_width=True):
-                    st.session_state.autopilot_active = True
-                    pilot.is_running = True
-                    cycle_res = pilot.execute_cycle(price_lookup_func=get_current_stock_quote)
-                    st.success(f"Auto-Pilot Activated! Executed Cycle #{cycle_res['cycle_number']}")
+                    pilot.start(price_lookup_func=get_current_stock_quote)
+                    st.success("Auto-Pilot Background Daemon Started! Will scan every 10 mins automatically.")
                     st.rerun()
             else:
                 if st.button("⏹️ Stop Auto-Pilot", type="secondary", use_container_width=True):
-                    st.session_state.autopilot_active = False
-                    pilot.is_running = False
-                    st.warning("Auto-Pilot Paused.")
+                    pilot.stop()
+                    st.warning("Auto-Pilot Background Worker Paused.")
                     st.rerun()
 
         with btn_c2:
@@ -678,8 +668,8 @@ with tab_autopilot:
         ist_now = pilot.get_ist_now()
         is_window, win_msg = pilot.is_within_trading_window(ist_now)
 
-        if st.session_state.autopilot_active:
-            status_html = "<span class='pill-bullish'>● ACTIVE (SYSTEMATIC POLLING)</span>"
+        if pilot.is_running:
+            status_html = "<span class='pill-bullish'>● ACTIVE (BACKGROUND DAEMON RUNNING)</span>"
         else:
             status_html = "<span class='pill-neutral'>○ STANDBY (STOPPED)</span>"
 
