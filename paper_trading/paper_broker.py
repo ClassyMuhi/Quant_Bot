@@ -87,6 +87,8 @@ KNOWN_MEGABULL_TOKENS: Dict[str, str] = {
     "WIPRO": "969473",
     "RELIANCE": "738561",
     "ONGC": "633601",
+    "TATAMOTORS": "884737",
+    "TMPV": "884737",
     "MARUTI": "2815745",
     "ITC": "424961",
     "HINDUNILVR": "356865",

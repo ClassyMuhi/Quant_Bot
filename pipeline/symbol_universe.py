@@ -96,11 +96,17 @@ class SymbolUniverse:
             if not active_only or s.is_active
         ]
 
+    TICKER_OVERRIDES = {
+        "TATAMOTORS": "TMPV.NS",  # Post-demerger active listed passenger vehicle entity
+    }
+
     @staticmethod
     def to_yahoo_ticker(symbol: str) -> str:
         """Convert a standard NSE symbol to Yahoo ticker."""
-        sym = symbol.strip().upper()
-        return sym if sym.endswith(".NS") else f"{sym}.NS"
+        sym = symbol.strip().upper().replace(".NS", "")
+        if sym in SymbolUniverse.TICKER_OVERRIDES:
+            return SymbolUniverse.TICKER_OVERRIDES[sym]
+        return f"{sym}.NS"
 
     @staticmethod
     def from_yahoo_ticker(yahoo_ticker: str) -> str:
