@@ -39,6 +39,31 @@ gateway = PaperExecutionGateway(portfolio=portfolio)
 decision_engine = DecisionEngine()
 pilot = get_global_autopilot(config=AutoPilotConfig(allocated_capital=100000.0), portfolio=portfolio)
 
+# Real-time Activity Event Buffer
+ACTIVITY_LOGS: list[dict[str, Any]] = []
+
+
+def log_activity(action: str, symbol: str, details: str):
+    """Add a structured log event to the real-time activity stream."""
+    now_str = datetime.now().strftime("%H:%M:%S")
+    ACTIVITY_LOGS.insert(0, {
+        "timestamp": now_str,
+        "symbol": symbol,
+        "action": action,
+        "details": details,
+    })
+    if len(ACTIVITY_LOGS) > 100:
+        ACTIVITY_LOGS.pop()
+
+
+# Seed initial system startup events
+log_activity("SYSTEM", "CORE", "Quant_Bot High Performance Trading Station v2.4 initialized.")
+if gateway.megabull_client:
+    log_activity("BROKER", "MEGABULL", f"Connected in Virtual Paper mode ({gateway.mode_label}). Live order routing active.")
+else:
+    log_activity("BROKER", "SIMULATION", "Local Paper Simulation Broker active.")
+log_activity("FEED", "STREAM", "Real-time telemetry feed running (polling every 2s). Engine standby.")
+
 
 def get_current_stock_quote(symbol: str) -> float:
     try:
@@ -101,18 +126,20 @@ async def api_state(request):
         })
 
     # Scan logs formatted
-    logs = [
+    scan_logs = [
         {
             "timestamp": l.timestamp,
             "symbol": l.symbol,
-            "decision": l.decision,
-            "score": l.score,
-            "confidence": l.confidence,
             "action": l.action,
-            "details": l.details,
+            "details": f"[{l.decision} score:{l.score:+.2f} conf:{int(l.confidence*100)}%] {l.details}",
         }
-        for l in pilot.scan_logs[:35]
+        for l in pilot.scan_logs[:40]
     ]
+
+    # Combine system activity events and autopilot scan records
+    unified_activity = list(ACTIVITY_LOGS)
+    for s_log in scan_logs:
+        unified_activity.append(s_log)
 
     return JSONResponse({
         "megabull_connected": mb_connected,
@@ -122,13 +149,14 @@ async def api_state(request):
         "summary": summary,
         "holdings": holdings_list,
         "symbols": universe.get_symbols(),
+        "activity_logs": unified_activity[:60],
         "autopilot": {
             "is_running": pilot.is_running,
             "cycle_count": pilot.cycle_count,
             "countdown_seconds": countdown_seconds,
             "last_cycle": pilot.last_cycle_time.strftime("%I:%M:%S %p") if pilot.last_cycle_time else "None",
             "next_cycle": pilot.next_cycle_time.strftime("%I:%M:%S %p") if pilot.next_cycle_time else "None",
-            "logs": logs,
+            "logs": unified_activity[:60],
         }
     })
 
@@ -139,28 +167,37 @@ async def api_autopilot_toggle(request):
     action = body.get("action")
     if action == "start":
         pilot.start(price_lookup_func=get_current_stock_quote)
+        log_activity("AUTOPILOT", "DAEMON", "Auto-Pilot started in background. Autonomous scanning every 10 mins.")
         return JSONResponse({"status": "success", "is_running": True})
     elif action == "stop":
         pilot.stop()
+        log_activity("AUTOPILOT", "DAEMON", "Auto-Pilot paused by operator.")
         return JSONResponse({"status": "success", "is_running": False})
     return JSONResponse({"status": "error", "message": "Invalid action"}, status_code=400)
 
 
 async def api_autopilot_scan(request):
     """Trigger an immediate manual scan cycle."""
+    log_activity("AUTOPILOT", "SCAN", "Manual universe scan triggered by operator.")
     res = pilot.execute_cycle(price_lookup_func=get_current_stock_quote)
+    trades = res.get("trades_placed", 0)
+    log_activity("AUTOPILOT", "RESULT", f"Universe scan completed. Trades placed: {trades} | Cycle #{pilot.cycle_count}")
     return JSONResponse({"status": "success", "result": res})
 
 
 async def api_autopilot_squareoff(request):
     """Emergency square off all intraday positions."""
     closed = pilot.square_off_all_intraday(price_lookup_func=get_current_stock_quote)
+    log_activity("EXIT", "ALL", f"Emergency square-off executed. Closed {len(closed)} intraday positions.")
     return JSONResponse({"status": "success", "closed_count": len(closed)})
 
 
 async def api_sync_megabull(request):
     """Sync balance and positions from MegaBull."""
     res = gateway.sync_portfolio_from_megabull()
+    cash = res.get("cash_balance", 0.0)
+    pos = res.get("positions_synced", 0)
+    log_activity("SYNC", "MEGABULL", f"Synchronized with MegaBull cloud. Balance: ₹{cash:,.2f} | Positions: {pos}")
     return JSONResponse(res)
 
 
@@ -211,6 +248,8 @@ async def api_place_order(request):
     )
 
     filled, rec = gateway.execute(order, current_market_price=curr_px)
+    note = rec.get("notes", "Filled")
+    log_activity(f"ORDER_{filled.side}", filled.symbol, f"Manual {filled.side} {filled.quantity} {filled.symbol} @ ₹{filled.executed_price:.2f} ({order.trading_style}) - {note}")
     return JSONResponse({
         "status": "success",
         "order_id": filled.order_id,
@@ -601,14 +640,33 @@ INDEX_HTML = """<!DOCTYPE html>
 
             // 4. Activity Logs
             const logBox = document.getElementById('terminal-logs');
-            if (ap.logs && ap.logs.length > 0) {
-                logBox.innerHTML = ap.logs.map(l => {
-                    let color = 'text-zinc-400';
-                    if (l.action.includes('ORDER')) color = 'text-emerald-400 font-bold';
-                    else if (l.action.includes('EXIT') || l.action.includes('SQUARE')) color = 'text-amber-400';
-                    else if (l.action.includes('REJECT')) color = 'text-rose-400';
-                    return `<div><span class="text-zinc-600">[${l.timestamp}]</span> <span class="${color}">${l.action}</span> <span class="text-zinc-300">${l.symbol}</span>: ${l.details}</div>`;
+            const streamLogs = (data.activity_logs && data.activity_logs.length > 0)
+                ? data.activity_logs
+                : (ap.logs && ap.logs.length > 0 ? ap.logs : []);
+
+            if (streamLogs.length > 0) {
+                logBox.innerHTML = streamLogs.map(l => {
+                    let color = 'text-zinc-400 font-medium';
+                    const act = (l.action || '').toUpperCase();
+                    if (act.includes('ORDER') || act.includes('BUY')) color = 'text-emerald-400 font-bold';
+                    else if (act.includes('EXIT') || act.includes('SQUARE') || act.includes('SELL')) color = 'text-amber-400 font-bold';
+                    else if (act.includes('REJECT')) color = 'text-rose-400 font-semibold';
+                    else if (act.includes('SYSTEM') || act.includes('BROKER') || act.includes('FEED') || act.includes('SYNC')) color = 'text-cyan-400 font-semibold';
+                    else if (act.includes('AUTOPILOT')) color = 'text-indigo-400 font-semibold';
+                    return `<div class="leading-relaxed py-0.5"><span class="text-zinc-600 font-mono">[${l.timestamp}]</span> <span class="${color}">${l.action}</span> <span class="text-zinc-200 font-bold">${l.symbol}</span>: <span class="text-zinc-300 font-mono text-[11px]">${l.details}</span></div>`;
                 }).join('');
+            } else {
+                logBox.innerHTML = '<div class="text-zinc-500 font-mono">🟢 Telemetry stream connected. Auto-Pilot in STANDBY. Click "Scan Now" or "Start Auto-Pilot" to trigger live scans.</div>';
+            }
+
+            // Sync stock selector dropdown
+            const stockSelect = document.getElementById('select-stock');
+            if (data.symbols && data.symbols.length > 0 && stockSelect.options.length <= 8) {
+                const curVal = stockSelect.value;
+                stockSelect.innerHTML = data.symbols.map(s => `<option value="${s}">${s}</option>`).join('');
+                if (data.symbols.includes(curVal)) {
+                    stockSelect.value = curVal;
+                }
             }
 
             // 5. Positions Table
