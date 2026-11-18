@@ -285,12 +285,20 @@ with tab_paper:
             mb_cash = float(mb_prof.get("virtualMoneyLeft", 0.0))
             mb_tot = float(mb_prof.get("virtualMoney", 0.0))
             mb_blk = float(mb_prof.get("virtualMoneyBlocked", 0.0))
-            st.markdown(
-                f"<div class='zinc-card' style='margin-bottom: 14px; border: 1px solid rgba(16, 185, 129, 0.4); background: rgba(16, 185, 129, 0.05);'>"
-                f"<b>🟢 Live MegaBull Session Connected:</b> {mb_prof.get('firstName', '')} {mb_prof.get('lastName', '')} ({mb_prof.get('emailId')}) &nbsp;|&nbsp; "
-                f"<b>Available Virtual Cash:</b> ₹{mb_cash:,.2f} &nbsp;|&nbsp; <b>Blocked Margin:</b> ₹{mb_blk:,.2f} &nbsp;|&nbsp; <b>Total:</b> ₹{mb_tot:,.2f}</div>",
-                unsafe_allow_html=True
-            )
+            mb_col1, mb_col2 = st.columns([3.5, 1.2])
+            with mb_col1:
+                st.markdown(
+                    f"<div class='zinc-card' style='margin-bottom: 14px; border: 1px solid rgba(16, 185, 129, 0.4); background: rgba(16, 185, 129, 0.05);'>"
+                    f"<b>🟢 Live MegaBull Session Connected:</b> {mb_prof.get('firstName', '')} {mb_prof.get('lastName', '')} ({mb_prof.get('emailId')}) &nbsp;|&nbsp; "
+                    f"<b>Available Virtual Cash:</b> ₹{mb_cash:,.2f} &nbsp;|&nbsp; <b>Blocked Margin:</b> ₹{mb_blk:,.2f} &nbsp;|&nbsp; <b>Total:</b> ₹{mb_tot:,.2f}</div>",
+                    unsafe_allow_html=True
+                )
+            with mb_col2:
+                if st.button("🔄 Sync with MegaBull", use_container_width=True):
+                    res = gateway.sync_portfolio_from_megabull()
+                    if res.get("status") == "success":
+                        st.success(f"Synced! Cash: ₹{res['cash']:,.2f}")
+                        st.rerun()
         except Exception:
             pass
 

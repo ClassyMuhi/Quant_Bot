@@ -5,6 +5,7 @@ and provides seamless failover / routing between Local Paper Simulation and Mega
 """
 
 from __future__ import annotations
+from datetime import datetime, timezone
 import logging
 import os
 from pathlib import Path
@@ -117,6 +118,11 @@ class PaperExecutionGateway:
         Uses an absolute path for .env so it works regardless of Streamlit's
         working directory at startup.
         """
+        # In unit test environments, operate in safe local mock mode
+        if "PYTEST_CURRENT_TEST" in os.environ:
+            self.megabull_client = None
+            return
+
         try:
             from dotenv import load_dotenv
             # Resolve .env relative to this file, not the CWD (Streamlit changes CWD)
@@ -214,3 +220,54 @@ class PaperExecutionGateway:
 
         # Local Paper Broker execution
         return self.local_broker.execute_order(order, market_price=current_market_price)
+
+    def sync_portfolio_from_megabull(self) -> Dict[str, Any]:
+        """
+        Synchronizes the local PaperPortfolio ledger (cash balance and open positions)
+        directly with the live MegaBull cloud account.
+        """
+        if self.megabull_client is None:
+            return {"status": "error", "message": "MegaBull client not connected"}
+
+        try:
+            profile = self.megabull_client.get_user_profile()
+            positions = self.megabull_client.get_positions()
+
+            # Update cash balance from MegaBull's actual available funds
+            live_cash = float(profile.get("virtualMoneyLeft", self.portfolio.cash))
+            self.portfolio.cash = live_cash
+
+            # Mirror active holdings
+            new_holdings = {}
+            if isinstance(positions, list):
+                for p in positions:
+                    sym = p.get("instrumentName", "").upper()
+                    qty = int(p.get("qty", 0))
+                    if qty > 0 and sym:
+                        avg_p = float(p.get("priceAvg", 0.0))
+                        dur = p.get("duration", "MIS")
+                        trading_style = "INTRADAY" if dur == "MIS" else "DELIVERY"
+                        new_holdings[sym] = {
+                            "quantity": qty,
+                            "avg_price": avg_p,
+                            "current_price": avg_p,
+                            "market_value": round(qty * avg_p, 2),
+                            "unrealized_pnl": float(p.get("pl", 0.0)),
+                            "trading_style": trading_style,
+                            "sl_price": round(avg_p * 0.97, 2),
+                            "target_price": round(avg_p * 1.06, 2),
+                            "opened_at": datetime.now(timezone.utc).isoformat(),
+                        }
+
+            self.portfolio.holdings = new_holdings
+            self.portfolio.save()
+            logger.info("Successfully synced local portfolio with MegaBull: Cash ₹%.2f, %d positions", live_cash, len(new_holdings))
+            return {
+                "status": "success",
+                "cash": live_cash,
+                "positions_count": len(new_holdings),
+                "profile": profile,
+            }
+        except Exception as e:
+            logger.error("Failed to sync portfolio from MegaBull: %s", e)
+            return {"status": "error", "message": str(e)}

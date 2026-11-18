@@ -126,7 +126,8 @@ class IntradayAutoPilot:
     def square_off_all_intraday(self, price_lookup_func=None) -> List[Dict[str, Any]]:
         """
         Closes all open INTRADAY positions at current market quotes.
-        Prevents overnight risk.
+        Prevents overnight risk. Routes exit orders through self.gateway.execute
+        so they are closed live on MegaBull when connected.
         """
         closed_records = []
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -141,18 +142,24 @@ class IntradayAutoPilot:
             qty = pos["quantity"]
             curr_price = price_lookup_func(s) if price_lookup_func else pos.get("current_price", pos["avg_price"])
 
-            cost = self.order_manager.position_sizer.cost_model.calculate_cost("SELL", curr_price, qty)
-            rec = self.portfolio.apply_trade(
+            order = PaperOrder(
+                order_id=f"ORD-SQOFF-{s}-{int(datetime.now().timestamp())}",
+                timestamp=now_iso,
                 symbol=s,
                 side="SELL",
-                quantity=qty,
-                executed_price=curr_price,
-                taxes_and_charges=cost.total_taxes_and_charges,
+                order_type="MARKET",
                 trading_style="INTRADAY",
-                notes="Auto-Pilot Mandatory Market Close Square-Off",
+                quantity=qty,
+                entry_price=curr_price,
+                limit_price=None,
+                stop_loss=None,
+                target_price=None,
+                time_in_force="DAY",
+                status="PENDING",
             )
-            closed_records.append(rec)
-            self._log(s, "SELL", 0.0, 1.0, "AUTO_SQUARE_OFF", f"Closed {qty} shares @ ₹{curr_price:,.2f}")
+            filled_order, trade_rec = self.gateway.execute(order, current_market_price=curr_price)
+            closed_records.append(trade_rec)
+            self._log(s, "SELL", 0.0, 1.0, "AUTO_SQUARE_OFF", f"Closed {qty} shares @ ₹{filled_order.executed_price:,.2f}")
 
         logger.info("Auto-Pilot: Squared off %d intraday positions.", len(closed_records))
         return closed_records
@@ -201,6 +208,25 @@ class IntradayAutoPilot:
                 bar_l = curr_p * 0.998
                 trigger = self.monitor.check_candle(sym, high=bar_h, low=bar_l, close=curr_p)
                 if trigger:
+                    # If in MegaBull mode, route live SELL order to close the cloud position
+                    if self.gateway.megabull_client is not None:
+                        exit_order = PaperOrder(
+                            order_id=f"ORD-EXIT-{sym}-{int(datetime.now().timestamp())}",
+                            timestamp=now_iso,
+                            symbol=sym,
+                            side="SELL",
+                            order_type="MARKET",
+                            trading_style="INTRADAY",
+                            quantity=pos["quantity"],
+                            entry_price=trigger.trigger_price,
+                            limit_price=None,
+                            stop_loss=None,
+                            target_price=None,
+                            time_in_force="DAY",
+                            status="PENDING",
+                        )
+                        self.gateway.execute(exit_order, current_market_price=trigger.trigger_price)
+
                     self._log(sym, "EXIT", 0.0, 1.0, f"TRIGGER_{trigger.trigger_type}", f"Exit hit at ₹{trigger.trigger_price:,.2f}")
                     results["actions"].append(f"{sym} exited via {trigger.trigger_type}")
 
@@ -225,8 +251,17 @@ class IntradayAutoPilot:
             if p.get("trading_style") == "INTRADAY"
         )
         remaining_budget = max(0.0, self.config.allocated_capital - current_intraday_invested)
-        # Cap by available paper cash
-        effective_budget = min(remaining_budget, self.portfolio.cash)
+
+        # Cap by available paper cash (or live MegaBull cash if connected)
+        available_cash = self.portfolio.cash
+        if self.gateway.megabull_client is not None:
+            try:
+                prof = self.gateway.megabull_client.get_user_profile()
+                available_cash = float(prof.get("virtualMoneyLeft", available_cash))
+            except Exception:
+                pass
+
+        effective_budget = min(remaining_budget, available_cash)
 
         if effective_budget < 5000.0:
             results["status"] = "INSUFFICIENT_ALLOCATED_CAPITAL"
