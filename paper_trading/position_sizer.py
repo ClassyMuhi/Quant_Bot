@@ -136,11 +136,41 @@ class PositionSizer:
             trade_cost = self.cost_model.calculate_cost(side_clean, entry_price, qty)
             required_capital = abs(trade_cost.net_cash_impact)
 
-        # Expected Profit & Loss in INR
+        # Round-trip statutory cost calculations
+        exit_side = "SELL" if side_clean == "BUY" else "BUY"
+        exit_target_cost = self.cost_model.calculate_cost(exit_side, target_price, qty)
+        exit_sl_cost = self.cost_model.calculate_cost(exit_side, stop_loss_price, qty)
+
+        # Full round-trip friction including entry and exit statutory taxes and brokerage
+        round_trip_target_charges = trade_cost.total_taxes_and_charges + exit_target_cost.total_taxes_and_charges
+        round_trip_sl_charges = trade_cost.total_taxes_and_charges + exit_sl_cost.total_taxes_and_charges
+
+        # Expected Profit & Loss in INR (Net of full round-trip friction)
         reward_per_share = abs(target_price - entry_price)
-        max_loss_inr = round(qty * risk_per_share + trade_cost.total_taxes_and_charges, 2)
-        expected_profit_inr = round(qty * reward_per_share - trade_cost.total_taxes_and_charges, 2)
-        rr_ratio = round(reward_per_share / risk_per_share, 2)
+        gross_profit_inr = qty * reward_per_share
+        gross_loss_inr = qty * risk_per_share
+
+        net_profit_inr = round(gross_profit_inr - round_trip_target_charges, 2)
+        net_max_loss_inr = round(gross_loss_inr + round_trip_sl_charges, 2)
+
+        # Economic Viability Gate 1: Gross profit must exceed round-trip statutory charges
+        if net_profit_inr <= 0:
+            return self._invalid_result(
+                f"Economically unviable trade: Projected gross reward (₹{gross_profit_inr:,.2f}) is lower than "
+                f"estimated round-trip statutory charges (₹{round_trip_target_charges:,.2f}). Trade rejected to prevent fee-bleed.",
+                entry_price, stop_loss_price, target_price
+            )
+
+        # Economic Viability Gate 2: Net Risk-to-Reward ratio after charges must be >= 1.0
+        net_rr_ratio = round(net_profit_inr / net_max_loss_inr, 2) if net_max_loss_inr > 0 else 0.0
+        if net_rr_ratio < 1.0:
+            return self._invalid_result(
+                f"Unfavorable net risk-reward: After round-trip charges (₹{round_trip_target_charges:,.2f}), "
+                f"net reward (₹{net_profit_inr:,.2f}) vs net risk (₹{net_max_loss_inr:,.2f}) gives R:R {net_rr_ratio:.2f} (minimum 1.00 required).",
+                entry_price, stop_loss_price, target_price
+            )
+
+        raw_rr_ratio = round(reward_per_share / risk_per_share, 2)
 
         return SizingResult(
             is_valid=True,
@@ -154,10 +184,10 @@ class PositionSizer:
             risk_based_quantity=risk_based_qty,
             budget_based_quantity=budget_based_qty,
             total_capital_required=round(required_capital, 2),
-            estimated_costs=round(trade_cost.total_taxes_and_charges, 2),
-            max_loss_inr=max_loss_inr,
-            expected_profit_inr=expected_profit_inr,
-            risk_to_reward_ratio=rr_ratio,
+            estimated_costs=round(round_trip_target_charges, 2),
+            max_loss_inr=net_max_loss_inr,
+            expected_profit_inr=net_profit_inr,
+            risk_to_reward_ratio=raw_rr_ratio,
             error_message=None,
         )
 

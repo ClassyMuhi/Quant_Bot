@@ -217,3 +217,26 @@ def test_ambiguous_candle_detection(tmp_path):
     assert "TCS" not in port.holdings  # Position safely closed
     assert "Ambiguous candle" in event.warning
 
+
+def test_economic_viability_and_fee_bleed_shield():
+    """Verifies that trades where statutory charges exceed gross gain are strictly rejected."""
+    sizer = PositionSizer()
+
+    # Scenario matching today's Maruti issue: Tiny 0.05% gain with huge charges
+    # Entry = 12659.0, Target = 12665.0 (Gain = 6.0 INR / share on 2 shares = 12.0 INR)
+    # But round-trip taxes & charges for 12,659 INR stock exceed 40 INR!
+    res = sizer.calculate_sizing(
+        symbol="MARUTI",
+        side="BUY",
+        investment_amount=30000.0,
+        risk_percent=1.5,
+        entry_price=12659.0,
+        stop_loss_price=12500.0,
+        target_price=12665.0,  # Unrealistic micro-target
+        available_cash=50000.0,
+    )
+
+    assert res.is_valid is False
+    assert "economically unviable" in res.error_message.lower() or "statutory charges" in res.error_message.lower()
+
+
