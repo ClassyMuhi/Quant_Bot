@@ -7,6 +7,7 @@ and provides seamless failover / routing between Local Paper Simulation and Mega
 from __future__ import annotations
 import logging
 import os
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 from backtest.cost_model import IndianEquityCostModel
 from paper_trading.order_manager import PaperOrder
@@ -89,22 +90,29 @@ class PaperExecutionGateway:
         self._check_megabull_status()
 
     def _check_megabull_status(self) -> None:
-        """Inspects whether MegaBull API client has valid active credentials."""
+        """
+        Inspects whether MegaBull API client has valid active credentials.
+        Uses an absolute path for .env so it works regardless of Streamlit's
+        working directory at startup.
+        """
         try:
             from dotenv import load_dotenv
-            load_dotenv()
+            # Resolve .env relative to this file, not the CWD (Streamlit changes CWD)
+            _env_path = Path(__file__).resolve().parent.parent / ".env"
+            load_dotenv(dotenv_path=_env_path, override=False)
             from broker.megabull import MegaBull
             api_key = os.getenv("MEGABULL_API_KEY", "")
-            if api_key and len(api_key.strip()) > 10:
-                client = MegaBull()
-                # Test connectivity
-                client.get_user_profile()
-                self.megabull_client = client
-                logger.info("MegaBull client authenticated successfully in Virtual Paper mode.")
-        except Exception:
-            # Fall back safely to Local Paper Broker
-            self.megabull_client = None
-            logger.info("Using Local Paper Simulation Broker (MegaBull live session not connected).")
+            if not api_key or len(api_key.strip()) <= 10:
+                logger.info("Using Local Paper Simulation Broker (MEGABULL_API_KEY not configured).")
+                return
+            client = MegaBull()
+            client.get_user_profile()
+            self.megabull_client = client
+            logger.info("MegaBull client authenticated successfully in Virtual Paper mode.")
+        except Exception as exc:
+            # Log the actual reason so it's never silently swallowed again
+            logger.warning(f"MegaBull connection failed ({type(exc).__name__}: {exc}). "
+                           "Falling back to Local Paper Simulation Broker.")
 
     @property
     def mode_label(self) -> str:
