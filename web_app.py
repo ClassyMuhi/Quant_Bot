@@ -261,6 +261,104 @@ async def api_place_order(request):
     })
 
 
+async def api_orders(request):
+    """
+    Returns the complete order audit trail and realized P&L analytics.
+    Includes both local simulated ledger trades and MegaBull cloud orders.
+    """
+    trades = list(portfolio.trades)
+
+    closed_trades = [t for t in trades if t.get("side", "").upper() == "SELL"]
+    buy_trades = [t for t in trades if t.get("side", "").upper() == "BUY"]
+
+    winning_trades = [t for t in closed_trades if float(t.get("realized_pnl", 0.0)) > 0.0]
+    losing_trades = [t for t in closed_trades if float(t.get("realized_pnl", 0.0)) < 0.0]
+    breakeven_trades = [t for t in closed_trades if float(t.get("realized_pnl", 0.0)) == 0.0]
+
+    total_realized_pnl = sum(float(t.get("realized_pnl", 0.0)) for t in closed_trades)
+    gross_profit = sum(float(t.get("realized_pnl", 0.0)) for t in winning_trades)
+    gross_loss = sum(float(t.get("realized_pnl", 0.0)) for t in losing_trades)
+    total_taxes = sum(float(t.get("taxes_and_charges", 0.0)) for t in trades)
+
+    win_rate = (len(winning_trades) / len(closed_trades) * 100.0) if closed_trades else 0.0
+
+    enriched_trades = []
+    for t in reversed(trades):
+        side = t.get("side", "BUY").upper()
+        pnl = float(t.get("realized_pnl", 0.0))
+        gross = float(t.get("gross_value", 0.0))
+        taxes = float(t.get("taxes_and_charges", 0.0))
+
+        status = "OPEN"
+        pnl_pct = 0.0
+        if side == "SELL":
+            if pnl > 0:
+                status = "PROFIT"
+            elif pnl < 0:
+                status = "LOSS"
+            else:
+                status = "BREAK-EVEN"
+
+            cost_basis = gross - pnl - taxes
+            if cost_basis > 0:
+                pnl_pct = round((pnl / cost_basis) * 100.0, 2)
+        else:
+            status = "ENTRY"
+            sym = t.get("symbol", "")
+            if sym in portfolio.holdings:
+                curr_px = get_current_stock_quote(sym)
+                avg_px = portfolio.holdings[sym].get("avg_price", t.get("price", 0.0))
+                if avg_px > 0:
+                    pnl_pct = round(((curr_px - avg_px) / avg_px) * 100.0, 2)
+
+        enriched_trades.append({
+            "order_id": t.get("order_id", ""),
+            "timestamp": t.get("timestamp", ""),
+            "symbol": t.get("symbol", ""),
+            "side": side,
+            "quantity": t.get("quantity", 0),
+            "price": float(t.get("price", 0.0)),
+            "gross_value": gross,
+            "taxes_and_charges": taxes,
+            "realized_pnl": pnl,
+            "pnl_pct": pnl_pct,
+            "status": status,
+            "trading_style": t.get("trading_style", "INTRADAY"),
+            "notes": t.get("notes", ""),
+        })
+
+    mb_orders = {"open": [], "executed": []}
+    if gateway.megabull_client:
+        try:
+            mb_data = gateway.megabull_client.get_orders()
+            if isinstance(mb_data, dict):
+                mb_orders = mb_data
+        except Exception as e:
+            logger.warning(f"Error fetching MegaBull orders: {e}")
+
+    return JSONResponse({
+        "summary": {
+            "total_trades": len(trades),
+            "closed_trades_count": len(closed_trades),
+            "buy_trades_count": len(buy_trades),
+            "winning_trades_count": len(winning_trades),
+            "losing_trades_count": len(losing_trades),
+            "breakeven_trades_count": len(breakeven_trades),
+            "win_rate": round(win_rate, 1),
+            "total_realized_pnl": round(total_realized_pnl, 2),
+            "gross_profit": round(gross_profit, 2),
+            "gross_loss": round(gross_loss, 2),
+            "total_taxes_and_charges": round(total_taxes, 2),
+            "net_pnl": round(total_realized_pnl, 2),
+            "cash_balance": round(portfolio.cash, 2),
+        },
+        "trades": enriched_trades,
+        "megabull_orders": mb_orders,
+        "megabull_connected": gateway.megabull_client is not None,
+        "mode_label": gateway.mode_label,
+    })
+
+
 # -------------------------------------------------------------
 # HIGH PERFORMANCE SINGLE-PAGE DASHBOARD TEMPLATE
 # -------------------------------------------------------------
@@ -308,14 +406,25 @@ INDEX_HTML = """<!DOCTYPE html>
 
     <!-- Top Navigation Bar -->
     <header class="border-b border-zinc-800 bg-zinc-900/90 backdrop-blur sticky top-0 z-50 px-6 py-3.5 flex items-center justify-between">
-        <div class="flex items-center gap-3">
-            <span class="text-xl">⚡</span>
-            <div>
-                <h1 class="text-base font-bold tracking-tight text-white flex items-center gap-2">
-                    QUANT_BOT <span class="text-xs px-2 py-0.5 rounded bg-zinc-800 text-zinc-300 font-mono">v2.4 PRO</span>
-                </h1>
-                <p class="text-xs text-zinc-400">Autonomous Quantitative Engine & Live Paper Terminal</p>
+        <div class="flex items-center gap-6">
+            <div class="flex items-center gap-3">
+                <span class="text-xl">⚡</span>
+                <div>
+                    <h1 class="text-base font-bold tracking-tight text-white flex items-center gap-2">
+                        QUANT_BOT <span class="text-xs px-2 py-0.5 rounded bg-zinc-800 text-zinc-300 font-mono">v2.4 PRO</span>
+                    </h1>
+                    <p class="text-xs text-zinc-400">Autonomous Quantitative Engine & Live Paper Terminal</p>
+                </div>
             </div>
+
+            <nav class="hidden md:flex items-center gap-1 font-medium text-xs">
+                <a href="/" class="px-3 py-1.5 rounded-lg bg-zinc-800 text-white font-semibold flex items-center gap-1.5 border border-zinc-700">
+                    <span>📊</span> Trading Station
+                </a>
+                <a href="/orders" class="px-3 py-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800/60 transition flex items-center gap-1.5 border border-transparent hover:border-zinc-700">
+                    <span>📜</span> Orders & P&L
+                </a>
+            </nav>
         </div>
 
         <div class="flex items-center gap-4">
@@ -430,7 +539,12 @@ INDEX_HTML = """<!DOCTYPE html>
                     <span class="text-base">💼</span>
                     <h2 class="font-bold text-white">Open Holdings & Real-Time Profit / Loss</h2>
                 </div>
-                <span id="positions-count" class="text-xs font-mono px-2 py-0.5 rounded bg-zinc-800 text-zinc-400">0 Positions</span>
+                <div class="flex items-center gap-3">
+                    <span id="positions-count" class="text-xs font-mono px-2 py-0.5 rounded bg-zinc-800 text-zinc-400">0 Positions</span>
+                    <a href="/orders" class="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs text-zinc-300 border border-zinc-700 transition flex items-center gap-1.5 font-sans">
+                        <span>📜</span> View Executed Orders & P&L
+                    </a>
+                </div>
             </div>
 
             <div class="overflow-x-auto">
@@ -780,10 +894,505 @@ INDEX_HTML = """<!DOCTYPE html>
 async def homepage(request):
     return HTMLResponse(INDEX_HTML)
 
+
+# -------------------------------------------------------------
+# ORDERS & PROFIT/LOSS AUDIT PAGE TEMPLATE
+# -------------------------------------------------------------
+ORDERS_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quant_Bot | Executed Orders & Realized P&L</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        zinc: {
+                            950: '#09090b',
+                            900: '#18181b',
+                            850: '#202024',
+                            800: '#27272a',
+                            700: '#3f3f46',
+                        },
+                        emerald: { 500: '#10b981', 400: '#34d399' },
+                        rose: { 500: '#f43f5e', 400: '#fb7185' }
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace']
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body { background-color: #09090b; color: #f4f4f5; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #18181b; }
+        ::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 3px; }
+        .pill-pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col font-sans antialiased text-sm">
+
+    <!-- Top Navigation Bar -->
+    <header class="border-b border-zinc-800 bg-zinc-900/90 backdrop-blur sticky top-0 z-50 px-6 py-3.5 flex items-center justify-between">
+        <div class="flex items-center gap-6">
+            <div class="flex items-center gap-3">
+                <span class="text-xl">⚡</span>
+                <div>
+                    <h1 class="text-base font-bold tracking-tight text-white flex items-center gap-2">
+                        QUANT_BOT <span class="text-xs px-2 py-0.5 rounded bg-zinc-800 text-zinc-300 font-mono">v2.4 PRO</span>
+                    </h1>
+                    <p class="text-xs text-zinc-400">Order Audit Trail & Realized Profit / Loss Ledger</p>
+                </div>
+            </div>
+
+            <nav class="hidden md:flex items-center gap-1 font-medium text-xs">
+                <a href="/" class="px-3 py-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition flex items-center gap-1.5 border border-transparent hover:border-zinc-700">
+                    <span>📊</span> Trading Station
+                </a>
+                <a href="/orders" class="px-3 py-1.5 rounded-lg bg-zinc-800 text-white font-semibold flex items-center gap-1.5 border border-zinc-700">
+                    <span>📜</span> Orders & P&L
+                </a>
+            </nav>
+        </div>
+
+        <div class="flex items-center gap-4">
+            <div id="mode-badge" class="px-3 py-1 rounded-full text-xs font-mono font-medium bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 flex items-center gap-1.5">
+                <span class="w-2 h-2 rounded-full bg-emerald-400 pill-pulse"></span>
+                <span id="mode-text">MEGABULL CONNECTED</span>
+            </div>
+            <a href="/" class="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs text-zinc-200 border border-zinc-700 transition flex items-center gap-1.5">
+                <span>←</span> Back to Dashboard
+            </a>
+            <div id="current-clock" class="text-xs font-mono text-zinc-400">--:--:-- IST</div>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <main class="flex-1 p-6 space-y-6 max-w-7xl mx-auto w-full">
+
+        <!-- 1. Executive P&L KPI Strip -->
+        <section class="grid grid-cols-2 md:grid-cols-5 gap-4">
+            <!-- Net Realized P&L -->
+            <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
+                <span class="text-xs font-medium text-zinc-400">Net Realized P&L</span>
+                <div id="kpi-net-pnl" class="text-2xl font-bold font-mono mt-1 text-white">₹0.00</div>
+                <div id="kpi-pnl-breakdown" class="text-[11px] text-zinc-500 mt-1">₹0.00 Profit / ₹0.00 Loss</div>
+            </div>
+
+            <!-- Win Rate -->
+            <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
+                <span class="text-xs font-medium text-zinc-400">Win Rate (Closed)</span>
+                <div id="kpi-win-rate" class="text-2xl font-bold font-mono text-white mt-1">0.0%</div>
+                <div id="kpi-win-ratio" class="text-[11px] text-zinc-500 mt-1">0 Wins / 0 Losses</div>
+            </div>
+
+            <!-- Total Taxes & Brokerage -->
+            <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
+                <span class="text-xs font-medium text-zinc-400">Taxes & Brokerage Charges</span>
+                <div id="kpi-taxes" class="text-2xl font-bold font-mono text-zinc-300 mt-1">₹0.00</div>
+                <div class="text-[11px] text-zinc-500 mt-1">STT, Exchange & Turnover</div>
+            </div>
+
+            <!-- Total Trades Executed -->
+            <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
+                <span class="text-xs font-medium text-zinc-400">Total Executed Orders</span>
+                <div id="kpi-total-orders" class="text-2xl font-bold font-mono text-white mt-1">0</div>
+                <div id="kpi-orders-breakdown" class="text-[11px] text-zinc-500 mt-1">0 Buys | 0 Sells</div>
+            </div>
+
+            <!-- Account Cash Balance -->
+            <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
+                <span class="text-xs font-medium text-zinc-400">Available Liquid Cash</span>
+                <div id="kpi-cash" class="text-2xl font-bold font-mono text-emerald-400 mt-1">₹0.00</div>
+                <div class="text-[11px] text-zinc-500 mt-1">Ready for deployment</div>
+            </div>
+        </section>
+
+        <!-- 2. Interactive Navigation, Tabs, Filter Pills & Search -->
+        <section class="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
+            <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-zinc-800 pb-4">
+                <!-- Source Tabs -->
+                <div class="flex items-center gap-2">
+                    <button id="tab-ledger" onclick="switchTab('ledger')" class="px-3.5 py-1.5 rounded-lg text-xs font-medium bg-zinc-800 text-white border border-zinc-700 transition flex items-center gap-1.5">
+                        <span>📘</span> System Ledger & P&L (<span id="count-ledger">0</span>)
+                    </button>
+                    <button id="tab-megabull" onclick="switchTab('megabull')" class="px-3.5 py-1.5 rounded-lg text-xs font-medium text-zinc-400 hover:text-white hover:bg-zinc-800/60 transition flex items-center gap-1.5">
+                        <span>☁️</span> MegaBull Cloud Orders (<span id="count-megabull">0</span>)
+                    </button>
+                </div>
+
+                <!-- Search & Export -->
+                <div class="flex items-center gap-3">
+                    <div class="relative">
+                        <input id="search-input" oninput="applyFilters()" type="text" placeholder="Search symbol or order ID..." class="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-white placeholder-zinc-500 font-mono focus:outline-none focus:border-zinc-600 w-56 md:w-64" />
+                    </div>
+                    <button onclick="exportCSV()" class="px-3 py-1.5 rounded-lg bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-400 border border-emerald-500/30 text-xs font-medium transition flex items-center gap-1.5">
+                        <span>📥</span> Export CSV
+                    </button>
+                    <button onclick="fetchOrders()" class="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-medium border border-zinc-700 transition flex items-center gap-1.5">
+                        <span>🔄</span> Refresh
+                    </button>
+                </div>
+            </div>
+
+            <!-- Filter Pills (for Ledger tab) -->
+            <div id="filter-pills-bar" class="flex flex-wrap items-center gap-2">
+                <span class="text-xs text-zinc-500 font-medium mr-1">Filter By:</span>
+                <button onclick="setFilter('ALL')" id="filter-all" class="px-2.5 py-1 rounded-full text-xs font-mono font-medium bg-zinc-700 text-white border border-zinc-600 transition">
+                    All (<span id="pill-count-all">0</span>)
+                </button>
+                <button onclick="setFilter('PROFIT')" id="filter-profit" class="px-2.5 py-1 rounded-full text-xs font-mono font-medium text-zinc-400 hover:bg-zinc-800 border border-zinc-800 transition">
+                    🟢 In Profit (<span id="pill-count-profit">0</span>)
+                </button>
+                <button onclick="setFilter('LOSS')" id="filter-loss" class="px-2.5 py-1 rounded-full text-xs font-mono font-medium text-zinc-400 hover:bg-zinc-800 border border-zinc-800 transition">
+                    🔴 In Loss (<span id="pill-count-loss">0</span>)
+                </button>
+                <button onclick="setFilter('SELL')" id="filter-sell" class="px-2.5 py-1 rounded-full text-xs font-mono font-medium text-zinc-400 hover:bg-zinc-800 border border-zinc-800 transition">
+                    📦 Sells / Square-Offs (<span id="pill-count-sell">0</span>)
+                </button>
+                <button onclick="setFilter('BUY')" id="filter-buy" class="px-2.5 py-1 rounded-full text-xs font-mono font-medium text-zinc-400 hover:bg-zinc-800 border border-zinc-800 transition">
+                    📥 Buys / Entries (<span id="pill-count-buy">0</span>)
+                </button>
+            </div>
+
+            <!-- Orders Table Container -->
+            <div class="overflow-x-auto">
+                <!-- 1. System Ledger Table -->
+                <table id="table-ledger" class="w-full text-left font-mono text-xs">
+                    <thead>
+                        <tr class="text-zinc-400 border-b border-zinc-800 pb-2">
+                            <th class="py-2.5 px-3 font-semibold">Date & Time (IST)</th>
+                            <th class="py-2.5 px-3 font-semibold">Order ID</th>
+                            <th class="py-2.5 px-3 font-semibold">Symbol</th>
+                            <th class="py-2.5 px-3 font-semibold">Side</th>
+                            <th class="py-2.5 px-3 font-semibold">Style</th>
+                            <th class="py-2.5 px-3 font-semibold text-right">Qty</th>
+                            <th class="py-2.5 px-3 font-semibold text-right">Price</th>
+                            <th class="py-2.5 px-3 font-semibold text-right">Gross Value</th>
+                            <th class="py-2.5 px-3 font-semibold text-right">Charges</th>
+                            <th class="py-2.5 px-3 font-semibold text-right">Realized P&L</th>
+                            <th class="py-2.5 px-3 font-semibold text-right">ROI %</th>
+                            <th class="py-2.5 px-3 font-semibold text-center">Outcome</th>
+                            <th class="py-2.5 px-3 font-semibold">Strategy Trigger / Notes</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tbody-ledger" class="divide-y divide-zinc-800/60">
+                        <tr><td colspan="13" class="py-8 text-center text-zinc-500">Loading executed orders...</td></tr>
+                    </tbody>
+                </table>
+
+                <!-- 2. MegaBull Cloud Orders Table -->
+                <table id="table-megabull" class="w-full text-left font-mono text-xs hidden">
+                    <thead>
+                        <tr class="text-zinc-400 border-b border-zinc-800 pb-2">
+                            <th class="py-2.5 px-3 font-semibold">Order ID</th>
+                            <th class="py-2.5 px-3 font-semibold">Created Time</th>
+                            <th class="py-2.5 px-3 font-semibold">Instrument</th>
+                            <th class="py-2.5 px-3 font-semibold">Type</th>
+                            <th class="py-2.5 px-3 font-semibold">Duration</th>
+                            <th class="py-2.5 px-3 font-semibold text-right">Quantity</th>
+                            <th class="py-2.5 px-3 font-semibold text-right">Execution Price</th>
+                            <th class="py-2.5 px-3 font-semibold text-right">Total Value</th>
+                            <th class="py-2.5 px-3 font-semibold text-center">Exchange Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tbody-megabull" class="divide-y divide-zinc-800/60">
+                        <tr><td colspan="9" class="py-8 text-center text-zinc-500">Loading MegaBull cloud orders...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <footer class="border-t border-zinc-800/80 py-4 px-6 text-center text-xs text-zinc-500">
+        Quant_Bot Systematic Trading Station • Orders & Profit/Loss Audit Trail • Real-Time Ledger Sync
+    </footer>
+
+    <script>
+        let allTrades = [];
+        let megabullOrders = [];
+        let currentFilter = 'ALL';
+        let currentTab = 'ledger';
+
+        function updateClock() {
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false });
+            const clockEl = document.getElementById('current-clock');
+            if (clockEl) clockEl.textContent = `${timeStr} IST`;
+        }
+
+        function formatIST(isoStr) {
+            if (!isoStr) return '--';
+            try {
+                const d = new Date(isoStr);
+                return d.toLocaleString('en-IN', {
+                    timeZone: 'Asia/Kolkata',
+                    day: '2-digit',
+                    month: 'short',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                    hour12: true
+                });
+            } catch (e) {
+                return isoStr.slice(0, 19).replace('T', ' ');
+            }
+        }
+
+        async function fetchOrders() {
+            try {
+                const res = await fetch('/api/orders');
+                const data = await res.json();
+                allTrades = data.trades || [];
+                megabullOrders = (data.megabull_orders && data.megabull_orders.executed) ? data.megabull_orders.executed : [];
+
+                // 1. Update Connection Badge
+                const modeText = document.getElementById('mode-text');
+                if (data.megabull_connected) {
+                    modeText.textContent = data.mode_label || 'MEGABULL CONNECTED';
+                    modeText.parentElement.className = 'px-3 py-1 rounded-full text-xs font-mono font-medium bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 flex items-center gap-1.5';
+                } else {
+                    modeText.textContent = 'LOCAL SIMULATION';
+                    modeText.parentElement.className = 'px-3 py-1 rounded-full text-xs font-mono font-medium bg-zinc-800 text-zinc-400 border border-zinc-700 flex items-center gap-1.5';
+                }
+
+                // 2. Render KPIs
+                const s = data.summary;
+                const netEl = document.getElementById('kpi-net-pnl');
+                const netSign = s.net_pnl >= 0 ? '+' : '';
+                netEl.textContent = `${netSign}₹${s.net_pnl.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+                netEl.className = 'text-2xl font-bold font-mono mt-1 ' + (s.net_pnl >= 0 ? 'text-emerald-400' : 'text-rose-400');
+
+                document.getElementById('kpi-pnl-breakdown').textContent = `+₹${s.gross_profit.toLocaleString('en-IN')} Profit / -₹${Math.abs(s.gross_loss).toLocaleString('en-IN')} Loss`;
+
+                document.getElementById('kpi-win-rate').textContent = `${s.win_rate}%`;
+                document.getElementById('kpi-win-ratio').textContent = `${s.winning_trades_count} Wins / ${s.losing_trades_count} Losses (${s.closed_trades_count} Closed)`;
+
+                document.getElementById('kpi-taxes').textContent = `₹${s.total_taxes_and_charges.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+                document.getElementById('kpi-total-orders').textContent = s.total_trades;
+                document.getElementById('kpi-orders-breakdown').textContent = `${s.buy_trades_count} Buys | ${s.closed_trades_count} Sells`;
+                document.getElementById('kpi-cash').textContent = `₹${s.cash_balance.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+
+                // 3. Tab & Pill counts
+                document.getElementById('count-ledger').textContent = allTrades.length;
+                document.getElementById('count-megabull').textContent = megabullOrders.length;
+                document.getElementById('pill-count-all').textContent = allTrades.length;
+                document.getElementById('pill-count-profit').textContent = s.winning_trades_count;
+                document.getElementById('pill-count-loss').textContent = s.losing_trades_count;
+                document.getElementById('pill-count-sell').textContent = s.closed_trades_count;
+                document.getElementById('pill-count-buy').textContent = s.buy_trades_count;
+
+                applyFilters();
+                renderMegaBullTable();
+            } catch (err) {
+                console.error("Error fetching orders:", err);
+            }
+        }
+
+        function setFilter(filter) {
+            currentFilter = filter;
+            const buttons = ['all', 'profit', 'loss', 'sell', 'buy'];
+            buttons.forEach(b => {
+                const el = document.getElementById(`filter-${b}`);
+                if (!el) return;
+                if (b.toUpperCase() === filter.toUpperCase()) {
+                    el.className = 'px-2.5 py-1 rounded-full text-xs font-mono font-medium bg-zinc-700 text-white border border-zinc-600 transition';
+                } else {
+                    el.className = 'px-2.5 py-1 rounded-full text-xs font-mono font-medium text-zinc-400 hover:bg-zinc-800 border border-zinc-800 transition';
+                }
+            });
+            applyFilters();
+        }
+
+        function applyFilters() {
+            const query = (document.getElementById('search-input').value || '').trim().toUpperCase();
+            let filtered = allTrades.filter(t => {
+                // Filter pill
+                if (currentFilter === 'PROFIT' && t.status !== 'PROFIT') return false;
+                if (currentFilter === 'LOSS' && t.status !== 'LOSS') return false;
+                if (currentFilter === 'SELL' && t.side !== 'SELL') return false;
+                if (currentFilter === 'BUY' && t.side !== 'BUY') return false;
+
+                // Search query
+                if (query) {
+                    const matchSymbol = t.symbol.toUpperCase().includes(query);
+                    const matchId = t.order_id.toUpperCase().includes(query);
+                    const matchNotes = (t.notes || '').toUpperCase().includes(query);
+                    if (!matchSymbol && !matchId && !matchNotes) return false;
+                }
+                return true;
+            });
+
+            renderLedgerTable(filtered);
+        }
+
+        function renderLedgerTable(trades) {
+            const tbody = document.getElementById('tbody-ledger');
+            if (!trades || trades.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="13" class="py-12 text-center text-zinc-500 font-sans">No orders match the selected filter.</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = trades.map(t => {
+                const isSell = t.side === 'SELL';
+                const sideColor = isSell ? 'bg-amber-500/10 text-amber-400 border border-amber-500/30' : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30';
+                
+                let outcomeBadge = '';
+                let pnlColor = 'text-zinc-400';
+                let pnlText = '--';
+                let roiText = '--';
+
+                if (isSell) {
+                    if (t.status === 'PROFIT') {
+                        outcomeBadge = '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">PROFIT</span>';
+                        pnlColor = 'text-emerald-400 font-bold';
+                        pnlText = `+₹${t.realized_pnl.toFixed(2)}`;
+                        roiText = `+${t.pnl_pct.toFixed(2)}%`;
+                    } else if (t.status === 'LOSS') {
+                        outcomeBadge = '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/10 text-rose-400 border border-rose-500/30">LOSS</span>';
+                        pnlColor = 'text-rose-400 font-bold';
+                        pnlText = `-₹${Math.abs(t.realized_pnl).toFixed(2)}`;
+                        roiText = `${t.pnl_pct.toFixed(2)}%`;
+                    } else {
+                        outcomeBadge = '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-zinc-800 text-zinc-400 border border-zinc-700">EVEN</span>';
+                        pnlText = '₹0.00';
+                        roiText = '0.00%';
+                    }
+                } else {
+                    outcomeBadge = '<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-cyan-500/10 text-cyan-400 border border-cyan-500/30">OPEN LEG</span>';
+                    pnlText = '<span class="text-zinc-600">--</span>';
+                    roiText = t.pnl_pct !== 0.0 ? `<span class="${t.pnl_pct >= 0 ? 'text-emerald-500' : 'text-rose-400'}">${t.pnl_pct >= 0 ? '+' : ''}${t.pnl_pct.toFixed(2)}%</span>` : '<span class="text-zinc-600">--</span>';
+                }
+
+                return `
+                    <tr class="hover:bg-zinc-800/40 transition">
+                        <td class="py-2.5 px-3 text-zinc-400 text-[11px] whitespace-nowrap">${formatIST(t.timestamp)}</td>
+                        <td class="py-2.5 px-3 text-zinc-500 text-[11px] font-mono">${t.order_id}</td>
+                        <td class="py-2.5 px-3 font-bold text-white">${t.symbol}</td>
+                        <td class="py-2.5 px-3"><span class="px-2 py-0.5 rounded text-[10px] font-semibold ${sideColor}">${t.side}</span></td>
+                        <td class="py-2.5 px-3"><span class="px-1.5 py-0.5 rounded bg-zinc-800 text-[10px] text-zinc-400">${t.trading_style}</span></td>
+                        <td class="py-2.5 px-3 text-right font-medium">${t.quantity}</td>
+                        <td class="py-2.5 px-3 text-right text-zinc-300">₹${t.price.toFixed(2)}</td>
+                        <td class="py-2.5 px-3 text-right text-zinc-400">₹${t.gross_value.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
+                        <td class="py-2.5 px-3 text-right text-zinc-500">₹${t.taxes_and_charges.toFixed(2)}</td>
+                        <td class="py-2.5 px-3 text-right font-mono ${pnlColor}">${pnlText}</td>
+                        <td class="py-2.5 px-3 text-right font-mono ${pnlColor}">${roiText}</td>
+                        <td class="py-2.5 px-3 text-center whitespace-nowrap">${outcomeBadge}</td>
+                        <td class="py-2.5 px-3 text-zinc-400 text-[11px] truncate max-w-xs" title="${t.notes || ''}">${t.notes || 'Executed'}</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function renderMegaBullTable() {
+            const tbody = document.getElementById('tbody-megabull');
+            if (!megabullOrders || megabullOrders.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="9" class="py-12 text-center text-zinc-500 font-sans">No cloud orders returned by MegaBull API.</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = megabullOrders.map(o => {
+                const isBuy = o.type === 'BUY';
+                const sideColor = isBuy ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30' : 'bg-amber-500/10 text-amber-400 border border-amber-500/30';
+                const val = (o.qty || 0) * (o.price || 0);
+
+                return `
+                    <tr class="hover:bg-zinc-800/40 transition">
+                        <td class="py-2.5 px-3 font-mono text-zinc-400">${o.id}</td>
+                        <td class="py-2.5 px-3 text-zinc-400 text-[11px] whitespace-nowrap">${formatIST(o.createdTimestamp)}</td>
+                        <td class="py-2.5 px-3 font-bold text-white">${o.instrumentName || o.instrumentToken}</td>
+                        <td class="py-2.5 px-3"><span class="px-2 py-0.5 rounded text-[10px] font-semibold ${sideColor}">${o.type}</span></td>
+                        <td class="py-2.5 px-3"><span class="px-1.5 py-0.5 rounded bg-zinc-800 text-[10px] text-zinc-400">${o.duration || 'MIS'}</span></td>
+                        <td class="py-2.5 px-3 text-right font-medium">${o.qty}</td>
+                        <td class="py-2.5 px-3 text-right text-zinc-300">₹${Number(o.price || 0).toFixed(2)}</td>
+                        <td class="py-2.5 px-3 text-right text-zinc-400">₹${val.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
+                        <td class="py-2.5 px-3 text-center"><span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">${o.status}</span></td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function switchTab(tab) {
+            currentTab = tab;
+            const btnLedger = document.getElementById('tab-ledger');
+            const btnMb = document.getElementById('tab-megabull');
+            const tableLedger = document.getElementById('table-ledger');
+            const tableMb = document.getElementById('table-megabull');
+            const filterBar = document.getElementById('filter-pills-bar');
+
+            if (tab === 'ledger') {
+                btnLedger.className = 'px-3.5 py-1.5 rounded-lg text-xs font-medium bg-zinc-800 text-white border border-zinc-700 transition flex items-center gap-1.5';
+                btnMb.className = 'px-3.5 py-1.5 rounded-lg text-xs font-medium text-zinc-400 hover:text-white hover:bg-zinc-800/60 transition flex items-center gap-1.5';
+                tableLedger.classList.remove('hidden');
+                tableMb.classList.add('hidden');
+                filterBar.classList.remove('hidden');
+            } else {
+                btnMb.className = 'px-3.5 py-1.5 rounded-lg text-xs font-medium bg-zinc-800 text-white border border-zinc-700 transition flex items-center gap-1.5';
+                btnLedger.className = 'px-3.5 py-1.5 rounded-lg text-xs font-medium text-zinc-400 hover:text-white hover:bg-zinc-800/60 transition flex items-center gap-1.5';
+                tableMb.classList.remove('hidden');
+                tableLedger.classList.add('hidden');
+                filterBar.classList.add('hidden');
+            }
+        }
+
+        function exportCSV() {
+            if (!allTrades || allTrades.length === 0) {
+                alert("No orders to export.");
+                return;
+            }
+            const headers = ["Order ID", "Timestamp", "Symbol", "Side", "Style", "Quantity", "Price", "Gross Value", "Charges", "Realized P&L", "Return %", "Status", "Notes"];
+            const rows = allTrades.map(t => [
+                t.order_id,
+                t.timestamp,
+                t.symbol,
+                t.side,
+                t.trading_style,
+                t.quantity,
+                t.price,
+                t.gross_value,
+                t.taxes_and_charges,
+                t.realized_pnl,
+                t.pnl_pct,
+                t.status,
+                `"${(t.notes || '').replace(/"/g, '""')}"`
+            ]);
+            const csvContent = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows.map(e => e.join(","))].join("\\n");
+            const encodedUri = encodeURI(csvContent);
+            const link = document.createElement("a");
+            link.setAttribute("href", encodedUri);
+            link.setAttribute("download", `quant_bot_orders_${new Date().toISOString().slice(0, 10)}.csv`);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        setInterval(fetchOrders, 4000);
+        setInterval(updateClock, 1000);
+        updateClock();
+        fetchOrders();
+    </script>
+</body>
+</html>
+"""
+
+async def orders_page(request):
+    return HTMLResponse(ORDERS_HTML)
+
+
 app = Starlette(
     routes=[
         Route("/", homepage),
+        Route("/orders", orders_page),
         Route("/api/state", api_state),
+        Route("/api/orders", api_orders),
         Route("/api/autopilot/toggle", api_autopilot_toggle, methods=["POST"]),
         Route("/api/autopilot/scan", api_autopilot_scan, methods=["POST"]),
         Route("/api/autopilot/squareoff", api_autopilot_squareoff, methods=["POST"]),
