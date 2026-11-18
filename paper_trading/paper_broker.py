@@ -77,6 +77,25 @@ class LocalPaperBroker:
         return order, trade_record
 
 
+# Pre-mapped tokens for standard NSE Universe on MegaBull
+KNOWN_MEGABULL_TOKENS: Dict[str, str] = {
+    "HDFCBANK": "341249",
+    "ICICIBANK": "1270529",
+    "SBIN": "779521",
+    "TCS": "2953217",
+    "INFY": "408065",
+    "WIPRO": "969473",
+    "RELIANCE": "738561",
+    "ONGC": "633601",
+    "MARUTI": "2815745",
+    "ITC": "424961",
+    "HINDUNILVR": "356865",
+    "TATASTEEL": "895745",
+    "LT": "2939649",
+    "BHARTIARTL": "2714625",
+}
+
+
 class PaperExecutionGateway:
     """
     Unified Paper Trading Gateway that routes orders to either LocalPaperBroker
@@ -87,6 +106,7 @@ class PaperExecutionGateway:
         self.portfolio = portfolio or PaperPortfolio()
         self.local_broker = LocalPaperBroker(self.portfolio)
         self.megabull_client = None
+        self._token_cache: Dict[str, str] = dict(KNOWN_MEGABULL_TOKENS)
         self._check_megabull_status()
 
     def _check_megabull_status(self) -> None:
@@ -114,6 +134,25 @@ class PaperExecutionGateway:
             logger.warning(f"MegaBull connection failed ({type(exc).__name__}: {exc}). "
                            "Falling back to Local Paper Simulation Broker.")
 
+    def _resolve_instrument_token(self, symbol: str) -> Optional[str]:
+        """Resolves the MegaBull numeric instrument token for a given NSE ticker."""
+        clean_sym = symbol.upper().replace(".NS", "").strip()
+        if clean_sym in self._token_cache:
+            return self._token_cache[clean_sym]
+
+        if self.megabull_client is not None:
+            try:
+                inst_df = self.megabull_client.get_instruments(as_dataframe=True)
+                match = inst_df[inst_df["tradingSymbol"] == clean_sym]
+                if not match.empty:
+                    token = str(match.iloc[0]["instrumentToken"])
+                    self._token_cache[clean_sym] = token
+                    return token
+            except Exception as e:
+                logger.warning(f"Error resolving token from master instrument list for {clean_sym}: {e}")
+
+        return None
+
     @property
     def mode_label(self) -> str:
         """Returns the active execution mode badge for UI display."""
@@ -127,7 +166,49 @@ class PaperExecutionGateway:
 
     def execute(self, order: PaperOrder, current_market_price: Optional[float] = None) -> Tuple[PaperOrder, Dict[str, Any]]:
         """
-        Routes the validated order to the active broker.
+        Routes the validated order to the active broker:
+        - When MegaBull is connected: Dispatches the order live to the MegaBull Virtual Paper API,
+          synchronizing fills and execution IDs with the remote server.
+        - Fallback: Executes against local paper simulation ledger.
         """
-        # Always safe: executes against local paper simulation
+        if self.megabull_client is not None:
+            token = self._resolve_instrument_token(order.symbol)
+            if token:
+                order_type_str = "LIMIT" if order.order_type == "LIMIT" else "MKT"
+                effective_px = float(order.limit_price or order.entry_price or current_market_price or 100.0)
+                duration_str = "CNC" if order.trading_style == "DELIVERY" else "MIS"
+
+                payload = {
+                    "instrumentToken": str(token),
+                    "qty": int(order.quantity),
+                    "type": order.side.upper(),
+                    "duration": duration_str,
+                    "orderType": order_type_str,
+                    "price": effective_px,
+                }
+
+                try:
+                    logger.info(f"Routing live order to MegaBull API: {order.side} {order.quantity} {order.symbol} @ ₹{effective_px:,.2f}")
+                    mb_res = self.megabull_client.place_order(payload)
+                    fill_px = float(mb_res.get("price") or effective_px)
+                    mb_order_id = str(mb_res.get("id") or order.order_id)
+                    logger.info(f"MegaBull Order Placed Successfully: Order #{mb_order_id} filled @ ₹{fill_px:,.2f}")
+
+                    # Update order object with real MegaBull execution feedback
+                    order.executed_price = fill_px
+                    order.order_id = f"MB-{mb_order_id}"
+
+                    # Also update local ledger to preserve audit log and P&L monitoring
+                    _, trade_record = self.local_broker.execute_order(order, market_price=fill_px)
+                    trade_record["megabull_id"] = mb_order_id
+                    trade_record["notes"] = f"MegaBull API Order #{mb_order_id} filled @ ₹{fill_px:,.2f}"
+                    return order, trade_record
+
+                except Exception as exc:
+                    logger.error(f"MegaBull order execution failed ({exc}). Falling back to local simulation.")
+
+            else:
+                logger.warning(f"Could not resolve MegaBull token for {order.symbol}. Executing locally.")
+
+        # Local Paper Broker execution
         return self.local_broker.execute_order(order, market_price=current_market_price)

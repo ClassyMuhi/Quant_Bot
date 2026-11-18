@@ -279,6 +279,21 @@ tab_paper, tab_autopilot, tab_decision, tab_godseye, tab_backtest = st.tabs([
 with tab_paper:
     st.markdown("#### Paper Trading Order Workstation")
 
+    if gateway.megabull_client is not None:
+        try:
+            mb_prof = gateway.megabull_client.get_user_profile()
+            mb_cash = float(mb_prof.get("virtualMoneyLeft", 0.0))
+            mb_tot = float(mb_prof.get("virtualMoney", 0.0))
+            mb_blk = float(mb_prof.get("virtualMoneyBlocked", 0.0))
+            st.markdown(
+                f"<div class='zinc-card' style='margin-bottom: 14px; border: 1px solid rgba(16, 185, 129, 0.4); background: rgba(16, 185, 129, 0.05);'>"
+                f"<b>🟢 Live MegaBull Session Connected:</b> {mb_prof.get('firstName', '')} {mb_prof.get('lastName', '')} ({mb_prof.get('emailId')}) &nbsp;|&nbsp; "
+                f"<b>Available Virtual Cash:</b> ₹{mb_cash:,.2f} &nbsp;|&nbsp; <b>Blocked Margin:</b> ₹{mb_blk:,.2f} &nbsp;|&nbsp; <b>Total:</b> ₹{mb_tot:,.2f}</div>",
+                unsafe_allow_html=True
+            )
+        except Exception:
+            pass
+
     summary = portfolio.get_summary()
 
     # Portfolio KPI Strip
@@ -432,6 +447,28 @@ with tab_paper:
 
     with c_holdings:
         st.markdown("##### 💼 Open Holdings & Active Positions")
+
+        if gateway.megabull_client is not None:
+            try:
+                mb_positions = gateway.megabull_client.get_positions()
+                if mb_positions and isinstance(mb_positions, list):
+                    st.markdown("###### 🌐 MegaBull Live Platform Positions")
+                    mb_rows = []
+                    for p in mb_positions:
+                        mb_rows.append({
+                            "Symbol": p.get("instrumentName", ""),
+                            "Type": p.get("type", ""),
+                            "Quantity": p.get("qty", 0),
+                            "Avg Price": f"₹{p.get('priceAvg', 0.0):,.2f}",
+                            "P&L": f"₹{p.get('pl', 0.0):+,.2f}",
+                            "Duration": p.get("duration", "MIS"),
+                        })
+                    if mb_rows:
+                        render_zinc_table(pd.DataFrame(mb_rows))
+                    st.markdown("<div style='height: 10px'></div>", unsafe_allow_html=True)
+            except Exception:
+                pass
+
         if not portfolio.holdings:
             st.info("No active open positions in paper portfolio.")
         else:
