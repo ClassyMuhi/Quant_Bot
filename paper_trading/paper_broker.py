@@ -91,12 +91,14 @@ class PaperExecutionGateway:
     def _check_megabull_status(self) -> None:
         """Inspects whether MegaBull API client has valid active credentials."""
         try:
-            from broker.megabull import MegaBullClient
+            from dotenv import load_dotenv
+            load_dotenv()
+            from broker.megabull import MegaBull
             api_key = os.getenv("MEGABULL_API_KEY", "")
             if api_key and len(api_key.strip()) > 10:
-                client = MegaBullClient()
+                client = MegaBull()
                 # Test connectivity
-                client.get_profile()
+                client.get_user_profile()
                 self.megabull_client = client
                 logger.info("MegaBull client authenticated successfully in Virtual Paper mode.")
         except Exception:
