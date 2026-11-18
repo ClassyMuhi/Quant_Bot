@@ -33,12 +33,12 @@ class AutoPilotConfig:
     """User-configured parameters for Intraday Auto-Pilot."""
     allocated_capital: float = 100_000.0   # Total amount user is willing to put in
     frequency_minutes: int = 10            # Strict minimum of 10 minutes
-    start_time_str: str = "09:15"          # Daily start time (HH:MM IST)
-    end_time_str: str = "15:15"            # Daily new entry cutoff (HH:MM IST)
+    start_time_str: str = "09:30"          # Daily start time (HH:MM IST) - avoids 09:15-09:30 opening noise
+    end_time_str: str = "14:30"            # Daily new entry cutoff (HH:MM IST) - stops entries within 50m of square-off
     square_off_time_str: str = "15:20"     # Mandatory intraday square-off time (HH:MM IST)
     risk_per_trade_pct: float = 1.5        # Max risk budget per trade
     max_active_positions: int = 3          # Max concurrent open intraday positions
-    min_confidence: float = 0.60           # Minimum signal confidence to trigger order
+    min_confidence: float = 0.65           # Minimum signal confidence to trigger order
 
     def __post_init__(self):
         # Enforce minimum frequency requirement of 10 minutes
