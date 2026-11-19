@@ -166,6 +166,39 @@ async def api_state(request):
             "last_cycle": pilot.last_cycle_time.strftime("%I:%M:%S %p") if pilot.last_cycle_time else "None",
             "next_cycle": pilot.next_cycle_time.strftime("%I:%M:%S %p") if pilot.next_cycle_time else "None",
             "logs": unified_activity[:60],
+            "config": {
+                "risk_per_trade_pct": pilot.config.risk_per_trade_pct,
+                "allocated_capital": pilot.config.allocated_capital,
+                "min_confidence": pilot.config.min_confidence,
+                "max_active_positions": pilot.config.max_active_positions,
+            }
+        }
+    })
+
+
+async def api_autopilot_config(request):
+    """Update Auto-Pilot risk parameters, capital allocation, and thresholds."""
+    data = await request.json()
+    if "risk_per_trade_pct" in data:
+        pilot.config.risk_per_trade_pct = float(data["risk_per_trade_pct"])
+    if "allocated_capital" in data:
+        pilot.config.allocated_capital = float(data["allocated_capital"])
+    if "min_confidence" in data:
+        pilot.config.min_confidence = float(data["min_confidence"])
+    if "max_active_positions" in data:
+        pilot.config.max_active_positions = int(data["max_active_positions"])
+
+    log_activity(
+        "AUTOPILOT", "CONFIG",
+        f"Risk settings updated: {pilot.config.risk_per_trade_pct}% risk/trade | Capital: ₹{pilot.config.allocated_capital:,.0f} | Max Pos: {pilot.config.max_active_positions}"
+    )
+    return JSONResponse({
+        "status": "success",
+        "config": {
+            "risk_per_trade_pct": pilot.config.risk_per_trade_pct,
+            "allocated_capital": pilot.config.allocated_capital,
+            "min_confidence": pilot.config.min_confidence,
+            "max_active_positions": pilot.config.max_active_positions,
         }
     })
 
@@ -231,7 +264,7 @@ async def api_evaluate_stock(request):
 
 
 async def api_place_order(request):
-    """Place manual order routing directly to MegaBull / local broker."""
+    """Place manual order routing directly to MegaBull / local broker with Price Limit and Risk Boundary controls."""
     data = await request.json()
     symbol = data.get("symbol", "").upper()
     side = data.get("side", "BUY").upper()
@@ -239,6 +272,11 @@ async def api_place_order(request):
     trading_style = data.get("style", "INTRADAY").upper()
     order_type = data.get("type", "MARKET").upper()
     curr_px = get_current_stock_quote(symbol)
+
+    limit_px = float(data.get("price")) if (order_type == "LIMIT" and data.get("price")) else None
+    sl_px = float(data.get("sl")) if data.get("sl") else None
+    target_px = float(data.get("target")) if data.get("target") else None
+    effective_entry = limit_px if limit_px is not None else curr_px
 
     order = PaperOrder(
         order_id=f"ORD-MAN-{symbol}-{int(datetime.now().timestamp())}",
@@ -248,21 +286,27 @@ async def api_place_order(request):
         order_type=order_type,
         trading_style=trading_style,
         quantity=qty,
-        entry_price=curr_px,
-        limit_price=float(data.get("price")) if order_type == "LIMIT" else None,
-        stop_loss=float(data.get("sl", 0.0)) or None,
-        target_price=float(data.get("target", 0.0)) or None,
+        entry_price=effective_entry,
+        limit_price=limit_px,
+        stop_loss=sl_px,
+        target_price=target_px,
         time_in_force="DAY",
         status="PENDING",
     )
 
-    filled, rec = gateway.execute(order, current_market_price=curr_px)
+    filled, rec = gateway.execute(order, current_market_price=effective_entry)
     note = rec.get("notes", "Filled")
-    log_activity(f"ORDER_{filled.side}", filled.symbol, f"Manual {filled.side} {filled.quantity} {filled.symbol} @ ₹{filled.executed_price:.2f} ({order.trading_style}) - {note}")
+    px_desc = f"LIMIT ₹{limit_px:.2f}" if order_type == "LIMIT" else f"MKT @ ₹{filled.executed_price:.2f}"
+    sl_desc = f"SL: ₹{sl_px:.2f}" if sl_px else "SL: None"
+    tp_desc = f"TP: ₹{target_px:.2f}" if target_px else "TP: None"
+    log_activity(f"ORDER_{filled.side}", filled.symbol, f"Manual {filled.side} {filled.quantity} {filled.symbol} [{px_desc} | {sl_desc} | {tp_desc}] ({order.trading_style}) - {note}")
     return JSONResponse({
         "status": "success",
         "order_id": filled.order_id,
         "executed_price": filled.executed_price,
+        "limit_price": limit_px,
+        "stop_loss": sl_px,
+        "target_price": target_px,
         "side": filled.side,
         "quantity": filled.quantity,
         "symbol": filled.symbol,
@@ -511,7 +555,45 @@ INDEX_HTML = """<!DOCTYPE html>
                     </div>
                     <div class="flex justify-between text-[11px] text-zinc-500 font-mono">
                         <span>Cycles Run: <b id="ap-cycles" class="text-zinc-300">0</b></span>
-                        <span>Window: <b class="text-zinc-300">09:15 - 15:15 IST</b></span>
+                        <span>Window: <b class="text-zinc-300">09:30 - 14:30 IST</b></span>
+                    </div>
+                </div>
+
+                <!-- Auto-Pilot Risk & Capital Configuration -->
+                <div class="bg-zinc-950/80 border border-zinc-800/80 rounded-lg p-3 space-y-2">
+                    <div class="flex items-center justify-between">
+                        <span class="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
+                            <span>🛡️</span> Risk Level per Trade
+                        </span>
+                        <span id="ap-risk-label" class="text-xs font-mono font-bold text-amber-400">1.5% Risk</span>
+                    </div>
+
+                    <div class="grid grid-cols-4 gap-1 text-[11px] font-mono">
+                        <button type="button" onclick="setApRisk(1.0)" id="ap-risk-10" class="py-1 rounded bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-700 transition">1.0%</button>
+                        <button type="button" onclick="setApRisk(1.5)" id="ap-risk-15" class="py-1 rounded bg-emerald-500/20 text-emerald-400 font-bold border border-emerald-500/40 transition">1.5%</button>
+                        <button type="button" onclick="setApRisk(2.0)" id="ap-risk-20" class="py-1 rounded bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-700 transition">2.0%</button>
+                        <button type="button" onclick="setApRisk(3.0)" id="ap-risk-30" class="py-1 rounded bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-700 transition">3.0%</button>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-2 pt-1 text-[11px]">
+                        <div>
+                            <label class="text-zinc-400 block mb-0.5">Budget Cap</label>
+                            <select id="ap-capital-select" onchange="updateApConfig()" class="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1 text-zinc-200 font-mono text-xs">
+                                <option value="50000">₹50,000</option>
+                                <option value="100000" selected>₹1,00,000</option>
+                                <option value="200000">₹2,00,000</option>
+                                <option value="500000">₹5,00,000</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="text-zinc-400 block mb-0.5">Max Slots</label>
+                            <select id="ap-slots-select" onchange="updateApConfig()" class="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1 text-zinc-200 font-mono text-xs">
+                                <option value="1">1 Trade</option>
+                                <option value="2">2 Trades</option>
+                                <option value="3" selected>3 Trades</option>
+                                <option value="5">5 Trades</option>
+                            </select>
+                        </div>
                     </div>
                 </div>
 
@@ -634,36 +716,99 @@ INDEX_HTML = """<!DOCTYPE html>
 
             <!-- Manual Quick-Order Terminal -->
             <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
-                <div class="flex items-center gap-2 border-b border-zinc-800 pb-3">
-                    <span class="text-base">⚡</span>
-                    <h2 class="font-bold text-white">Instant Order Dispatch</h2>
+                <div class="flex items-center justify-between border-b border-zinc-800 pb-3">
+                    <div class="flex items-center gap-2">
+                        <span class="text-base">⚡</span>
+                        <h2 class="font-bold text-white">Instant Order Dispatch</h2>
+                    </div>
+                    <span id="order-type-badge" class="text-[10px] font-mono px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 border border-zinc-700">MARKET</span>
                 </div>
 
                 <div class="space-y-3">
-                    <div>
-                        <label class="text-[11px] text-zinc-400 block mb-1">Stock Instrument</label>
-                        <input id="order-symbol" type="text" readonly value="HDFCBANK" class="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs font-mono text-zinc-200">
-                    </div>
+                    <!-- Stock Symbol & Style -->
                     <div class="grid grid-cols-2 gap-2">
                         <div>
-                            <label class="text-[11px] text-zinc-400 block mb-1">Quantity</label>
-                            <input id="order-qty" type="number" value="1" min="1" class="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs font-mono text-white">
+                            <label class="text-[11px] text-zinc-400 block mb-1">Symbol</label>
+                            <input id="order-symbol" type="text" readonly value="HDFCBANK" class="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs font-mono font-bold text-zinc-100">
                         </div>
                         <div>
-                            <label class="text-[11px] text-zinc-400 block mb-1">Style</label>
-                            <select id="order-style" class="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-white font-mono">
+                            <label class="text-[11px] text-zinc-400 block mb-1">Trading Style</label>
+                            <select id="order-style" class="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono">
                                 <option value="INTRADAY">MIS (Intraday)</option>
                                 <option value="DELIVERY">CNC (Delivery)</option>
                             </select>
                         </div>
                     </div>
+
+                    <!-- Order Type (Market vs Limit) & Price Limit Input -->
+                    <div class="space-y-1.5">
+                        <label class="text-[11px] text-zinc-400 block">Execution & Price Limit</label>
+                        <div class="grid grid-cols-2 gap-1.5 p-0.5 rounded-lg bg-zinc-950 border border-zinc-800 text-xs font-mono font-medium">
+                            <button type="button" onclick="setOrderType('MARKET')" id="btn-type-market" class="py-1 rounded-md bg-zinc-800 text-white font-bold transition">
+                                ⚡ MARKET
+                            </button>
+                            <button type="button" onclick="setOrderType('LIMIT')" id="btn-type-limit" class="py-1 rounded-md text-zinc-400 hover:text-white transition">
+                                🎯 LIMIT
+                            </button>
+                        </div>
+
+                        <div class="relative pt-1">
+                            <div class="flex justify-between items-center mb-1 text-[11px]">
+                                <span class="text-zinc-400">Limit Price (₹)</span>
+                                <button type="button" onclick="useCurrentQuote()" class="text-emerald-400 hover:underline font-mono text-[10px]">Use Market Quote</button>
+                            </div>
+                            <input id="order-price" oninput="recalcBoundaries('BUY')" type="number" step="0.05" placeholder="Market execution" class="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs font-mono text-white focus:outline-none focus:border-zinc-600">
+                        </div>
+                    </div>
+
+                    <!-- Quantity -->
+                    <div>
+                        <label class="text-[11px] text-zinc-400 block mb-1">Quantity (Shares)</label>
+                        <input id="order-qty" type="number" value="1" min="1" class="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs font-mono text-white">
+                    </div>
+
+                    <!-- Risk Level & Boundary Management -->
+                    <div class="bg-zinc-950/80 border border-zinc-800/80 rounded-lg p-3 space-y-2">
+                        <div class="flex items-center justify-between">
+                            <span class="text-[11px] text-zinc-300 font-semibold flex items-center gap-1">
+                                <span>🛡️</span> Risk Level & Boundaries
+                            </span>
+                            <span id="order-risk-badge" class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">1.5% Risk</span>
+                        </div>
+
+                        <!-- Risk Presets -->
+                        <div class="grid grid-cols-4 gap-1 text-[10px] font-mono">
+                            <button type="button" onclick="applyOrderRisk(1.0)" id="risk-btn-10" class="py-1 rounded bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-700 transition">1.0%</button>
+                            <button type="button" onclick="applyOrderRisk(1.5)" id="risk-btn-15" class="py-1 rounded bg-emerald-500/20 text-emerald-400 font-bold border border-emerald-500/40 transition">1.5%</button>
+                            <button type="button" onclick="applyOrderRisk(2.5)" id="risk-btn-25" class="py-1 rounded bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-700 transition">2.5%</button>
+                            <button type="button" onclick="applyOrderRisk(0.0)" id="risk-btn-custom" class="py-1 rounded bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-700 transition">Custom</button>
+                        </div>
+
+                        <!-- SL & TP Inputs -->
+                        <div class="grid grid-cols-2 gap-2 pt-1 text-xs font-mono">
+                            <div>
+                                <label class="text-[10px] text-rose-400 block mb-0.5">Stop-Loss (₹)</label>
+                                <input id="order-sl" oninput="recalcCustomRR()" type="number" step="0.05" class="w-full bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1 text-rose-300 font-mono text-xs">
+                            </div>
+                            <div>
+                                <label class="text-[10px] text-emerald-400 block mb-0.5">Target (₹)</label>
+                                <input id="order-target" oninput="recalcCustomRR()" type="number" step="0.05" class="w-full bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1 text-emerald-300 font-mono text-xs">
+                            </div>
+                        </div>
+
+                        <div id="rr-summary-bar" class="text-[10px] text-zinc-400 flex justify-between font-mono pt-1 border-t border-zinc-800/60">
+                            <span>R:R: <b id="rr-val" class="text-white">1:2.0</b></span>
+                            <span>Risk: <b id="risk-val" class="text-rose-400">₹0.00</b></span>
+                            <span>Target: <b id="reward-val" class="text-emerald-400">₹0.00</b></span>
+                        </div>
+                    </div>
                 </div>
 
-                <div class="grid grid-cols-2 gap-2 pt-2">
-                    <button onclick="placeManualOrder('BUY')" class="w-full py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 font-bold text-white text-xs transition">
+                <div class="grid grid-cols-2 gap-2 pt-1">
+                    <button onclick="placeManualOrder('BUY')" class="w-full py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 font-bold text-white text-xs transition shadow-lg shadow-emerald-950/40">
                         BUY ORDER
                     </button>
-                    <button onclick="placeManualOrder('SELL')" class="w-full py-2.5 rounded-lg bg-rose-600 hover:bg-rose-500 font-bold text-white text-xs transition">
+                    <button onclick="placeManualOrder('SELL')" class="w-full py-2.5 rounded-lg bg-rose-600 hover:bg-rose-500 font-bold text-white text-xs transition shadow-lg shadow-rose-950/40">
                         SELL ORDER
                     </button>
                 </div>
@@ -677,6 +822,9 @@ INDEX_HTML = """<!DOCTYPE html>
     <script>
         let currentIsRunning = false;
         let lastCountdown = 0;
+        let currentOrderType = 'MARKET';
+        let currentOrderRisk = 1.5;
+        let lastLiveQuote = 1000.0;
 
         function updateClock() {
             const now = new Date();
@@ -685,6 +833,113 @@ INDEX_HTML = """<!DOCTYPE html>
         }
         setInterval(updateClock, 1000);
         updateClock();
+
+        function setOrderType(type) {
+            currentOrderType = type;
+            const btnMkt = document.getElementById('btn-type-market');
+            const btnLmt = document.getElementById('btn-type-limit');
+            const badge = document.getElementById('order-type-badge');
+            const priceInput = document.getElementById('order-price');
+
+            if (type === 'MARKET') {
+                btnMkt.className = 'py-1 rounded-md bg-zinc-800 text-white font-bold transition';
+                btnLmt.className = 'py-1 rounded-md text-zinc-400 hover:text-white transition';
+                badge.textContent = 'MARKET';
+                badge.className = 'text-[10px] font-mono px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 border border-zinc-700';
+                priceInput.placeholder = 'Market execution';
+                priceInput.value = '';
+            } else {
+                btnLmt.className = 'py-1 rounded-md bg-emerald-600 text-white font-bold transition';
+                btnMkt.className = 'py-1 rounded-md text-zinc-400 hover:text-white transition';
+                badge.textContent = 'LIMIT';
+                badge.className = 'text-[10px] font-mono px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/30';
+                if (!priceInput.value) {
+                    priceInput.value = lastLiveQuote.toFixed(2);
+                }
+                priceInput.focus();
+            }
+            recalcBoundaries('BUY');
+        }
+
+        function useCurrentQuote() {
+            setOrderType('LIMIT');
+            document.getElementById('order-price').value = lastLiveQuote.toFixed(2);
+            recalcBoundaries('BUY');
+        }
+
+        function applyOrderRisk(riskPct) {
+            currentOrderRisk = riskPct;
+            ['10', '15', '25', 'custom'].forEach(k => {
+                const btn = document.getElementById(`risk-btn-${k}`);
+                if (btn) btn.className = 'py-1 rounded bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-700 transition';
+            });
+
+            const badge = document.getElementById('order-risk-badge');
+            if (riskPct === 1.0) {
+                document.getElementById('risk-btn-10').className = 'py-1 rounded bg-emerald-500/20 text-emerald-400 font-bold border border-emerald-500/40 transition';
+                badge.textContent = '1.0% Risk';
+            } else if (riskPct === 1.5) {
+                document.getElementById('risk-btn-15').className = 'py-1 rounded bg-emerald-500/20 text-emerald-400 font-bold border border-emerald-500/40 transition';
+                badge.textContent = '1.5% Risk';
+            } else if (riskPct === 2.5) {
+                document.getElementById('risk-btn-25').className = 'py-1 rounded bg-emerald-500/20 text-emerald-400 font-bold border border-emerald-500/40 transition';
+                badge.textContent = '2.5% Risk';
+            } else {
+                document.getElementById('risk-btn-custom').className = 'py-1 rounded bg-amber-500/20 text-amber-400 font-bold border border-amber-500/40 transition';
+                badge.textContent = 'Custom R:R';
+            }
+
+            if (riskPct > 0) {
+                recalcBoundaries('BUY');
+            }
+        }
+
+        function recalcBoundaries(side) {
+            const rawPx = parseFloat(document.getElementById('order-price').value) || lastLiveQuote || 1000.0;
+            if (currentOrderRisk > 0 && rawPx > 0) {
+                const delta = rawPx * (currentOrderRisk / 100);
+                const sl = side === 'BUY' ? (rawPx - delta) : (rawPx + delta);
+                const tp = side === 'BUY' ? (rawPx + delta * 2.0) : (rawPx - delta * 2.0);
+                document.getElementById('order-sl').value = sl.toFixed(2);
+                document.getElementById('order-target').value = tp.toFixed(2);
+            }
+            recalcCustomRR();
+        }
+
+        function recalcCustomRR() {
+            const rawPx = parseFloat(document.getElementById('order-price').value) || lastLiveQuote || 1000.0;
+            const sl = parseFloat(document.getElementById('order-sl').value);
+            const tp = parseFloat(document.getElementById('order-target').value);
+
+            if (sl && tp && rawPx) {
+                const risk = Math.abs(rawPx - sl);
+                const reward = Math.abs(tp - rawPx);
+                const ratio = risk > 0 ? (reward / risk).toFixed(1) : '0';
+                document.getElementById('rr-val').textContent = `1:${ratio}`;
+                document.getElementById('risk-val').textContent = `₹${risk.toFixed(2)}`;
+                document.getElementById('reward-val').textContent = `₹${reward.toFixed(2)}`;
+            }
+        }
+
+        async function setApRisk(pct) {
+            await fetch('/api/autopilot/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ risk_per_trade_pct: pct })
+            });
+            fetchState();
+        }
+
+        async function updateApConfig() {
+            const cap = parseFloat(document.getElementById('ap-capital-select').value);
+            const slots = parseInt(document.getElementById('ap-slots-select').value);
+            await fetch('/api/autopilot/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ allocated_capital: cap, max_active_positions: slots })
+            });
+            fetchState();
+        }
 
         async function fetchState() {
             try {
@@ -765,6 +1020,31 @@ INDEX_HTML = """<!DOCTYPE html>
             
             const pctProg = Math.min(100, Math.max(0, 100 - (ap.countdown_seconds / 600 * 100)));
             document.getElementById('ap-progress-bar').style.width = pctProg + '%';
+
+            // Sync Auto-Pilot Config UI
+            if (ap.config) {
+                const riskPct = ap.config.risk_per_trade_pct || 1.5;
+                const riskLbl = document.getElementById('ap-risk-label');
+                if (riskLbl) riskLbl.textContent = `${riskPct.toFixed(1)}% Risk`;
+
+                ['10', '15', '20', '30'].forEach(k => {
+                    const btn = document.getElementById(`ap-risk-${k}`);
+                    if (btn) btn.className = 'py-1 rounded bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-700 transition';
+                });
+                const key = String(Math.round(riskPct * 10));
+                const activeBtn = document.getElementById(`ap-risk-${key}`);
+                if (activeBtn) {
+                    activeBtn.className = 'py-1 rounded bg-emerald-500/20 text-emerald-400 font-bold border border-emerald-500/40 transition';
+                }
+                const capSelect = document.getElementById('ap-capital-select');
+                if (capSelect && ap.config.allocated_capital && document.activeElement !== capSelect) {
+                    capSelect.value = String(parseInt(ap.config.allocated_capital));
+                }
+                const slotsSelect = document.getElementById('ap-slots-select');
+                if (slotsSelect && ap.config.max_active_positions && document.activeElement !== slotsSelect) {
+                    slotsSelect.value = String(parseInt(ap.config.max_active_positions));
+                }
+            }
 
             // 4. Activity Logs
             const logBox = document.getElementById('terminal-logs');
@@ -877,6 +1157,18 @@ INDEX_HTML = """<!DOCTYPE html>
                 document.getElementById('dec-entry').textContent = '₹' + data.entry_price.toFixed(2);
                 document.getElementById('dec-sl').textContent = data.stop_loss ? '₹' + data.stop_loss.toFixed(2) : '--';
                 document.getElementById('dec-tp').textContent = data.target_price ? '₹' + data.target_price.toFixed(2) : '--';
+
+                lastLiveQuote = data.current_price;
+                if (currentOrderType === 'LIMIT' && !document.getElementById('order-price').value) {
+                    document.getElementById('order-price').value = data.current_price.toFixed(2);
+                }
+                if (data.stop_loss) {
+                    document.getElementById('order-sl').value = data.stop_loss.toFixed(2);
+                }
+                if (data.target_price) {
+                    document.getElementById('order-target').value = data.target_price.toFixed(2);
+                }
+                recalcCustomRR();
             } catch (e) {
                 console.error(e);
             }
@@ -886,13 +1178,32 @@ INDEX_HTML = """<!DOCTYPE html>
             const sym = document.getElementById('order-symbol').value;
             const qty = document.getElementById('order-qty').value;
             const style = document.getElementById('order-style').value;
+            const priceVal = document.getElementById('order-price').value;
+            const slVal = document.getElementById('order-sl').value;
+            const targetVal = document.getElementById('order-target').value;
+
+            const payload = {
+                symbol: sym,
+                side: side,
+                quantity: qty,
+                style: style,
+                type: currentOrderType,
+                price: (currentOrderType === 'LIMIT' && priceVal) ? parseFloat(priceVal) : null,
+                sl: slVal ? parseFloat(slVal) : null,
+                target: targetVal ? parseFloat(targetVal) : null,
+                risk_percent: currentOrderRisk
+            };
+
             const res = await fetch('/api/trade', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ symbol: sym, side: side, quantity: qty, style: style, type: 'MARKET' })
+                body: JSON.stringify(payload)
             });
             const data = await res.json();
-            alert(`Order Dispatched: ${side} ${qty} ${sym} -> Filled @ ₹${data.executed_price}`);
+            const pxDesc = currentOrderType === 'LIMIT' ? `LIMIT ₹${priceVal}` : `MKT @ ₹${data.executed_price}`;
+            const slDesc = slVal ? ` | SL: ₹${slVal}` : '';
+            const tpDesc = targetVal ? ` | TP: ₹${targetVal}` : '';
+            alert(`Order Dispatched: ${side} ${qty} ${sym} [${pxDesc}${slDesc}${tpDesc}] -> Status: ${data.status}`);
             fetchState();
         }
 
@@ -1409,6 +1720,7 @@ app = Starlette(
         Route("/api/orders", api_orders),
         Route("/api/autopilot/toggle", api_autopilot_toggle, methods=["POST"]),
         Route("/api/autopilot/scan", api_autopilot_scan, methods=["POST"]),
+        Route("/api/autopilot/config", api_autopilot_config, methods=["POST"]),
         Route("/api/autopilot/squareoff", api_autopilot_squareoff, methods=["POST"]),
         Route("/api/sync_megabull", api_sync_megabull, methods=["POST"]),
         Route("/api/evaluate/{symbol}", api_evaluate_stock),
