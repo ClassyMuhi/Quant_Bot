@@ -140,7 +140,7 @@ async def api_state(request):
             "timestamp": l.timestamp,
             "symbol": l.symbol,
             "action": l.action,
-            "details": f"[{l.decision} score:{l.score:+.2f} conf:{int(l.confidence*100)}%] {l.details}",
+            "details": l.details if l.symbol == "AUTOPILOT" else f"[{l.decision} score:{l.score:+.2f} conf:{int(l.confidence*100)}%] {l.details}",
         }
         for l in pilot.scan_logs[:40]
     ]

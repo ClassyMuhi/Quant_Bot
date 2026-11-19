@@ -302,6 +302,7 @@ class IntradayAutoPilot:
 
         if not can_enter:
             results["status"] = f"SKIPPED_OUTSIDE_WINDOW ({reason})"
+            self._log("AUTOPILOT", "WINDOW", 0.0, 1.0, "SKIPPED", f"Cycle #{self.cycle_count}: Outside trading window ({reason})")
             return results
 
         # 4. Check Available Intraday Budget & Position Slots
@@ -312,6 +313,7 @@ class IntradayAutoPilot:
 
         if available_slots <= 0:
             results["status"] = f"MAX_POSITIONS_REACHED ({self.config.max_active_positions})"
+            self._log("AUTOPILOT", "HOLDINGS", 0.0, 1.0, "SKIPPED", f"Cycle #{self.cycle_count}: All {self.config.max_active_positions} slots occupied ({current_intraday_positions} open intraday)")
             return results
 
         # Capital available for auto-pilot = allocated_capital - current invested in intraday
@@ -335,6 +337,10 @@ class IntradayAutoPilot:
 
         if effective_budget < 5000.0:
             results["status"] = "INSUFFICIENT_ALLOCATED_CAPITAL"
+            self._log(
+                "AUTOPILOT", "BUDGET_CAP", 0.0, 1.0, "SKIPPED",
+                f"Cycle #{self.cycle_count}: Budget cap ₹{self.config.allocated_capital:,.0f} utilized (₹{current_intraday_invested:,.0f} in active positions, ₹{remaining_budget:,.0f} remaining < ₹5,000 min)"
+            )
             return results
 
         per_trade_investment = effective_budget / available_slots
@@ -389,6 +395,10 @@ class IntradayAutoPilot:
                     f"Filled {filled.quantity} shares @ ₹{filled.executed_price:,.2f} | SL=₹{sl_p:,.2f} TP=₹{tp_p:,.2f}"
                 )
 
+        self._log(
+            "AUTOPILOT", "CYCLE", 0.0, 1.0, "COMPLETED",
+            f"Cycle #{self.cycle_count} finished. Scanned {len(symbols)} symbols. Trades placed: {results['trades_placed']}"
+        )
         return results
 
     def _log(self, symbol: str, decision: str, score: float, conf: float, action: str, details: str):
