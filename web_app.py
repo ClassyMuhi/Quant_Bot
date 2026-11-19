@@ -497,7 +497,10 @@ async def api_analytics_charts(request):
 
 async def api_copilot_query(request):
     """OpenDashboards AI Copilot assistant for conversational intelligence."""
-    body = await request.json()
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
     prompt = body.get("prompt", "").strip()
     p_lower = prompt.lower()
 
