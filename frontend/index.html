@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quant_Bot | OpenDashboards™ Intelligent Trading Station</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        zinc: {
+                            950: '#09090b',
+                            900: '#18181b',
+                            850: '#202024',
+                            800: '#27272a',
+                            700: '#3f3f46',
+                        },
+                        emerald: { 500: '#10b981', 400: '#34d399' },
+                        rose: { 500: '#f43f5e', 400: '#fb7185' }
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace']
+                    }
+                }
+            }
+        }
+    </script>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body class="min-h-screen flex flex-col font-sans antialiased text-sm">
+
+    <!-- Top Navigation Bar -->
+    <header class="border-b border-zinc-800 bg-zinc-900/90 backdrop-blur sticky top-0 z-50 px-6 py-3.5 flex items-center justify-between">
+        <div class="flex items-center gap-6">
+            <div class="flex items-center gap-3">
+                <span class="text-xl">⚡</span>
+                <div>
+                    <h1 class="text-base font-bold tracking-tight text-white flex items-center gap-2">
+                        QUANT_BOT <span class="text-xs px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-400 border border-indigo-500/30 font-mono font-semibold">OpenDashboards™</span>
+                    </h1>
+                    <p class="text-xs text-zinc-400">Autonomous Quantitative Station & Interactive Analytics Suite</p>
+                </div>
+            </div>
+
+            <nav class="hidden md:flex items-center gap-1 font-medium text-xs">
+                <a href="/" class="px-3 py-1.5 rounded-lg bg-zinc-800 text-white font-semibold flex items-center gap-1.5 border border-zinc-700">
+                    <span>📊</span> Trading Station
+                </a>
+                <a href="#analytics-section" class="px-3 py-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800/60 transition flex items-center gap-1.5 border border-transparent hover:border-zinc-700">
+                    <span>📈</span> Visual Analytics
+                </a>
+                <a href="/orders" class="px-3 py-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800/60 transition flex items-center gap-1.5 border border-transparent hover:border-zinc-700">
+                    <span>📜</span> Orders & P&L
+                </a>
+            </nav>
+        </div>
+
+        <div class="flex items-center gap-4">
+            <div id="mode-badge" class="px-3 py-1 rounded-full text-xs font-mono font-medium bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 flex items-center gap-1.5">
+                <span class="w-2 h-2 rounded-full bg-emerald-400 pill-pulse"></span>
+                <span id="mode-text">MEGABULL CONNECTED</span>
+            </div>
+            <button onclick="syncMegaBull()" class="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs text-zinc-200 border border-zinc-700 transition flex items-center gap-1.5">
+                <span>🔄</span> Sync MegaBull
+            </button>
+            <div id="current-clock" class="text-xs font-mono text-zinc-400">--:--:-- IST</div>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <main class="flex-1 p-6 space-y-6 max-w-7xl mx-auto w-full">
+
+        <!-- 1. P&L & Capital Strip -->
+        <section class="grid grid-cols-2 md:grid-cols-5 gap-4">
+            <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
+                <span class="text-xs font-medium text-zinc-400">Virtual Portfolio Capital</span>
+                <div id="kpi-total" class="text-2xl font-bold font-mono text-white mt-1">₹5,00,000.00</div>
+                <span class="text-[11px] text-zinc-500">Total Allocated Limit</span>
+            </div>
+            <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
+                <span class="text-xs font-medium text-zinc-400">Available Liquid Cash</span>
+                <div id="kpi-cash" class="text-2xl font-bold font-mono text-emerald-400 mt-1">₹2,79,026.00</div>
+                <span class="text-[11px] text-zinc-500">Ready to Deploy</span>
+            </div>
+            <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
+                <span class="text-xs font-medium text-zinc-400">Blocked Margin</span>
+                <div id="kpi-margin" class="text-2xl font-bold font-mono text-amber-400 mt-1">₹2,20,973.55</div>
+                <span class="text-[11px] text-zinc-500">In Active Positions</span>
+            </div>
+            <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
+                <span class="text-xs font-medium text-zinc-400">Unrealized P&L</span>
+                <div id="kpi-unrealized" class="text-2xl font-bold font-mono text-white mt-1">₹0.00</div>
+                <span id="kpi-unrealized-pct" class="text-[11px] text-zinc-400">0.00% return</span>
+            </div>
+            <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
+                <span class="text-xs font-medium text-zinc-400">Realized P&L Today</span>
+                <div id="kpi-realized" class="text-2xl font-bold font-mono text-white mt-1">₹0.00</div>
+                <span class="text-[11px] text-zinc-500">Booked Profit/Loss</span>
+            </div>
+        </section>
+
+        <!-- OpenDashboards™ Interactive Visual Analytics Suite -->
+        <section id="analytics-section" class="space-y-4">
+            <div class="flex items-center justify-between border-b border-zinc-800/80 pb-3">
+                <div class="flex items-center gap-2">
+                    <span class="text-base">📈</span>
+                    <h2 class="font-bold text-white text-base tracking-tight">OpenDashboards™ Quantitative Visualizer</h2>
+                    <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-400 border border-indigo-500/30">Live Analytics</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <div class="inline-flex rounded-lg bg-zinc-900 border border-zinc-800 p-0.5 text-xs font-mono">
+                        <button type="button" onclick="setChartMode('DAY2')" id="btn-chart-day2" class="px-2.5 py-1 rounded-md bg-emerald-500/20 text-emerald-400 font-bold transition">
+                            Day 2 Live Fills
+                        </button>
+                        <button type="button" onclick="setChartMode('ALL')" id="btn-chart-all" class="px-2.5 py-1 rounded-md text-zinc-400 hover:text-white transition">
+                            All History
+                        </button>
+                    </div>
+                    <button onclick="fetchChartData()" class="px-2.5 py-1 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-xs text-zinc-300 border border-zinc-800 transition flex items-center gap-1 font-mono">
+                        <span>🔄</span> Refresh
+                    </button>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <!-- Chart 1: Equity Curve & Realized P&L -->
+                <div class="lg:col-span-2 bg-zinc-900/90 border border-zinc-800 rounded-xl p-5 space-y-3">
+                    <div class="flex items-center justify-between border-b border-zinc-800/80 pb-2.5">
+                        <div>
+                            <h3 class="font-semibold text-white text-sm">Cumulative Equity & Realized P&L Curve</h3>
+                            <p class="text-[11px] text-zinc-400 font-mono">Real-time ledger progression with drawdown tracking</p>
+                        </div>
+                        <div class="text-right">
+                            <span id="chart-net-badge" class="text-xs font-mono font-bold text-emerald-400">+₹562.70 (Day 2 Net)</span>
+                        </div>
+                    </div>
+                    <div id="chart-equity" class="w-full h-64"></div>
+                </div>
+
+                <!-- Chart 2: Capital Allocation Donut -->
+                <div class="bg-zinc-900/90 border border-zinc-800 rounded-xl p-5 space-y-3 flex flex-col">
+                    <div class="border-b border-zinc-800/80 pb-2.5">
+                        <h3 class="font-semibold text-white text-sm">Capital Allocation & Exposure</h3>
+                        <p class="text-[11px] text-zinc-400 font-mono">Liquid Cash vs Margin vs Assets</p>
+                    </div>
+                    <div class="flex-1 flex items-center justify-center">
+                        <div id="chart-allocation" class="w-full"></div>
+                    </div>
+                </div>
+
+                <!-- Chart 3: Realized P&L Distribution by Asset -->
+                <div class="lg:col-span-3 bg-zinc-900/90 border border-zinc-800 rounded-xl p-5 space-y-3">
+                    <div class="flex items-center justify-between border-b border-zinc-800/80 pb-2.5">
+                        <div>
+                            <h3 class="font-semibold text-white text-sm">Asset Realized Profit / Loss Breakdown</h3>
+                            <p id="symbol-chart-subtitle" class="text-[11px] text-zinc-400 font-mono">MegaBull live closed trades: HINDUNILVR (+₹388.50), LT (+₹179.20), MARUTI (-₹5.00)</p>
+                        </div>
+                        <span class="text-xs font-mono text-zinc-400">Green = Win | Red = Controlled Loss</span>
+                    </div>
+                    <div id="chart-symbol-pnl" class="w-full h-52"></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- 2. Auto-Pilot & Control Dashboard -->
+        <section class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            
+            <!-- Left: Auto-Pilot Mission Control -->
+            <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
+                <div class="flex items-center justify-between border-b border-zinc-800 pb-3">
+                    <div class="flex items-center gap-2">
+                        <span class="text-base">🤖</span>
+                        <h2 class="font-bold text-white">Intraday Auto-Pilot</h2>
+                    </div>
+                    <span id="ap-status-badge" class="px-2.5 py-0.5 rounded-full text-xs font-mono font-medium bg-zinc-800 text-zinc-400 border border-zinc-700">
+                        STANDBY
+                    </span>
+                </div>
+
+                <!-- Countdown & Cycle Stats -->
+                <div class="bg-zinc-950/80 border border-zinc-800/80 rounded-lg p-3.5 space-y-2">
+                    <div class="flex justify-between items-center text-xs">
+                        <span class="text-zinc-400">Next 10-Min Autonomous Scan:</span>
+                        <span id="ap-countdown" class="font-mono text-emerald-400 font-bold text-sm">--:--</span>
+                    </div>
+                    <div class="w-full bg-zinc-800 h-1.5 rounded-full overflow-hidden">
+                        <div id="ap-progress-bar" class="bg-emerald-500 h-full w-0 transition-all duration-1000"></div>
+                    </div>
+                    <div class="flex justify-between text-[11px] text-zinc-500 font-mono">
+                        <span>Cycles Run: <b id="ap-cycles" class="text-zinc-300">0</b></span>
+                        <span>Window: <b class="text-zinc-300">09:30 - 14:30 IST</b></span>
+                    </div>
+                </div>
+
+                <!-- Auto-Pilot Risk & Capital Configuration -->
+                <div class="bg-zinc-950/80 border border-zinc-800/80 rounded-lg p-3 space-y-2">
+                    <div class="flex items-center justify-between">
+                        <span class="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
+                            <span>🛡️</span> Risk Level per Trade
+                        </span>
+                        <span id="ap-risk-label" class="text-xs font-mono font-bold text-amber-400">1.5% Risk</span>
+                    </div>
+
+                    <div class="grid grid-cols-4 gap-1 text-[11px] font-mono">
+                        <button type="button" onclick="setApRisk(1.0)" id="ap-risk-10" class="py-1 rounded bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-700 transition">1.0%</button>
+                        <button type="button" onclick="setApRisk(1.5)" id="ap-risk-15" class="py-1 rounded bg-emerald-500/20 text-emerald-400 font-bold border border-emerald-500/40 transition">1.5%</button>
+                        <button type="button" onclick="setApRisk(2.0)" id="ap-risk-20" class="py-1 rounded bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-700 transition">2.0%</button>
+                        <button type="button" onclick="setApRisk(3.0)" id="ap-risk-30" class="py-1 rounded bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-700 transition">3.0%</button>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-2 pt-1 text-[11px]">
+                        <div>
+                            <label class="text-zinc-400 block mb-0.5">Budget Cap</label>
+                            <select id="ap-capital-select" onchange="updateApConfig()" class="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1 text-zinc-200 font-mono text-xs">
+                                <option value="50000">₹50,000</option>
+                                <option value="100000" selected>₹1,00,000</option>
+                                <option value="200000">₹2,00,000</option>
+                                <option value="500000">₹5,00,000</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="text-zinc-400 block mb-0.5">Max Slots</label>
+                            <select id="ap-slots-select" onchange="updateApConfig()" class="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1 text-zinc-200 font-mono text-xs">
+                                <option value="1">1 Trade</option>
+                                <option value="2">2 Trades</option>
+                                <option value="3" selected>3 Trades</option>
+                                <option value="5">5 Trades</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Action Buttons -->
+                <div class="grid grid-cols-2 gap-2.5 pt-1">
+                    <button id="btn-toggle-ap" onclick="toggleAutoPilot()" class="w-full py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 font-medium text-white text-xs transition shadow-lg shadow-emerald-950/30 flex items-center justify-center gap-1.5">
+                        <span>▶️</span> Start Auto-Pilot
+                    </button>
+                    <button onclick="scanNow()" class="w-full py-2.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 font-medium text-zinc-200 text-xs border border-zinc-700 transition flex items-center justify-center gap-1.5">
+                        <span>⚡</span> Scan Now
+                    </button>
+                </div>
+
+                <button onclick="emergencySquareOff()" class="w-full py-2 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 text-xs font-medium transition flex items-center justify-center gap-1.5">
+                    <span>🚨</span> Emergency Square-Off All Intraday
+                </button>
+            </div>
+
+            <!-- Right: Live Scrolling Activity Terminal -->
+            <div class="lg:col-span-2 bg-zinc-900 border border-zinc-800 rounded-xl p-5 flex flex-col">
+                <div class="flex items-center justify-between border-b border-zinc-800 pb-3 mb-3">
+                    <div class="flex items-center gap-2">
+                        <span class="text-base">📜</span>
+                        <h2 class="font-bold text-white">Live Decision & Activity Stream</h2>
+                    </div>
+                    <span class="text-xs text-zinc-500 font-mono">Real-Time Telemetry</span>
+                </div>
+
+                <div id="terminal-logs" class="flex-1 max-h-64 overflow-y-auto space-y-1.5 font-mono text-xs bg-zinc-950 border border-zinc-800/80 rounded-lg p-3">
+                    <div class="text-zinc-500">Initializing live stream connection...</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- 3. Open Positions & Active Holdings Table -->
+        <section class="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
+            <div class="flex items-center justify-between border-b border-zinc-800 pb-3">
+                <div class="flex items-center gap-2">
+                    <span class="text-base">💼</span>
+                    <h2 class="font-bold text-white">Open Holdings & Real-Time Profit / Loss</h2>
+                </div>
+                <div class="flex items-center gap-3">
+                    <span id="positions-count" class="text-xs font-mono px-2 py-0.5 rounded bg-zinc-800 text-zinc-400">0 Positions</span>
+                    <a href="/orders" class="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs text-zinc-300 border border-zinc-700 transition flex items-center gap-1.5 font-sans">
+                        <span>📜</span> View Executed Orders & P&L
+                    </a>
+                </div>
+            </div>
+
+            <div class="overflow-x-auto">
+                <table class="w-full text-left font-mono text-xs">
+                    <thead>
+                        <tr class="text-zinc-400 border-b border-zinc-800 pb-2">
+                            <th class="py-2 px-3 font-semibold">Symbol</th>
+                            <th class="py-2 px-3 font-semibold">Style</th>
+                            <th class="py-2 px-3 font-semibold text-right">Quantity</th>
+                            <th class="py-2 px-3 font-semibold text-right">Avg Price</th>
+                            <th class="py-2 px-3 font-semibold text-right">Current Price</th>
+                            <th class="py-2 px-3 font-semibold text-right">Market Value</th>
+                            <th class="py-2 px-3 font-semibold text-right">Unrealized P&L</th>
+                            <th class="py-2 px-3 font-semibold text-right">Return %</th>
+                            <th class="py-2 px-3 font-semibold text-center">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="positions-tbody" class="divide-y divide-zinc-800/60">
+                        <tr><td colspan="9" class="py-6 text-center text-zinc-500">No open positions. Ready to trade.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- 4. Decision Engine, Order Terminal & OpenDashboards AI Copilot -->
+        <section class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <!-- Stock Decision Inspector -->
+            <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
+                <div class="flex items-center justify-between border-b border-zinc-800 pb-3">
+                    <div class="flex items-center gap-2">
+                        <span class="text-base">🧠</span>
+                        <h2 class="font-bold text-white">Decision Engine & Confluence Inspector</h2>
+                    </div>
+                    <select id="select-stock" onchange="evaluateStock()" class="bg-zinc-800 border border-zinc-700 text-xs text-white rounded-lg px-3 py-1 font-mono">
+                        <option value="HDFCBANK">HDFCBANK</option>
+                        <option value="TCS">TCS</option>
+                        <option value="RELIANCE">RELIANCE</option>
+                        <option value="INFY">INFY</option>
+                        <option value="ITC">ITC</option>
+                        <option value="MARUTI">MARUTI</option>
+                        <option value="TATASTEEL">TATASTEEL</option>
+                        <option value="TATAMOTORS">TATAMOTORS</option>
+                    </select>
+                </div>
+
+                <div class="grid grid-cols-3 gap-3">
+                    <div class="bg-zinc-950 p-3 rounded-lg border border-zinc-800">
+                        <span class="text-[11px] text-zinc-500">Signal Rating</span>
+                        <div id="dec-signal" class="text-base font-bold font-mono mt-1 text-emerald-400">BUY</div>
+                    </div>
+                    <div class="bg-zinc-950 p-3 rounded-lg border border-zinc-800">
+                        <span class="text-[11px] text-zinc-500">Conviction / Score</span>
+                        <div id="dec-score" class="text-base font-bold font-mono mt-1 text-white">+0.75 (85%)</div>
+                    </div>
+                    <div class="bg-zinc-950 p-3 rounded-lg border border-zinc-800">
+                        <span class="text-[11px] text-zinc-500">Market Quote</span>
+                        <div id="dec-quote" class="text-base font-bold font-mono mt-1 text-white">₹812.00</div>
+                    </div>
+                </div>
+
+                <div class="bg-zinc-950 p-3.5 rounded-lg border border-zinc-800 space-y-2">
+                    <span class="text-xs font-semibold text-zinc-400">Institutional Confluence Rationale</span>
+                    <p id="dec-rationale" class="text-xs text-zinc-300 leading-relaxed font-sans">
+                        Select a stock above to generate transparent technical & news evaluation.
+                    </p>
+                    <div class="grid grid-cols-3 gap-2 pt-2 border-t border-zinc-800/80 text-xs font-mono">
+                        <div>Entry: <span id="dec-entry" class="text-zinc-200">--</span></div>
+                        <div>SL: <span id="dec-sl" class="text-rose-400">--</span></div>
+                        <div>TP: <span id="dec-tp" class="text-emerald-400">--</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Manual Quick-Order Terminal -->
+            <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
+                <div class="flex items-center justify-between border-b border-zinc-800 pb-3">
+                    <div class="flex items-center gap-2">
+                        <span class="text-base">⚡</span>
+                        <h2 class="font-bold text-white">Instant Order Dispatch</h2>
+                    </div>
+                    <span id="order-type-badge" class="text-[10px] font-mono px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 border border-zinc-700">MARKET</span>
+                </div>
+
+                <div class="space-y-3">
+                    <!-- Stock Symbol & Style -->
+                    <div class="grid grid-cols-2 gap-2">
+                        <div>
+                            <label class="text-[11px] text-zinc-400 block mb-1">Symbol</label>
+                            <input id="order-symbol" type="text" readonly value="HDFCBANK" class="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs font-mono font-bold text-zinc-100">
+                        </div>
+                        <div>
+                            <label class="text-[11px] text-zinc-400 block mb-1">Trading Style</label>
+                            <select id="order-style" class="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono">
+                                <option value="INTRADAY">MIS (Intraday)</option>
+                                <option value="DELIVERY">CNC (Delivery)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Order Type (Market vs Limit) & Price Limit Input -->
+                    <div class="space-y-1.5">
+                        <label class="text-[11px] text-zinc-400 block">Execution & Price Limit</label>
+                        <div class="grid grid-cols-2 gap-1.5 p-0.5 rounded-lg bg-zinc-950 border border-zinc-800 text-xs font-mono font-medium">
+                            <button type="button" onclick="setOrderType('MARKET')" id="btn-type-market" class="py-1 rounded-md bg-zinc-800 text-white font-bold transition">
+                                ⚡ MARKET
+                            </button>
+                            <button type="button" onclick="setOrderType('LIMIT')" id="btn-type-limit" class="py-1 rounded-md text-zinc-400 hover:text-white transition">
+                                🎯 LIMIT
+                            </button>
+                        </div>
+
+                        <div class="relative pt-1">
+                            <div class="flex justify-between items-center mb-1 text-[11px]">
+                                <span class="text-zinc-400">Limit Price (₹)</span>
+                                <button type="button" onclick="useCurrentQuote()" class="text-emerald-400 hover:underline font-mono text-[10px]">Use Market Quote</button>
+                            </div>
+                            <input id="order-price" oninput="recalcBoundaries('BUY')" type="number" step="0.05" placeholder="Market execution" class="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs font-mono text-white focus:outline-none focus:border-zinc-600">
+                        </div>
+                    </div>
+
+                    <!-- Quantity -->
+                    <div>
+                        <label class="text-[11px] text-zinc-400 block mb-1">Quantity (Shares)</label>
+                        <input id="order-qty" type="number" value="1" min="1" class="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs font-mono text-white">
+                    </div>
+
+                    <!-- Risk Level & Boundary Management -->
+                    <div class="bg-zinc-950/80 border border-zinc-800/80 rounded-lg p-3 space-y-2">
+                        <div class="flex items-center justify-between">
+                            <span class="text-[11px] text-zinc-300 font-semibold flex items-center gap-1">
+                                <span>🛡️</span> Risk Level & Boundaries
+                            </span>
+                            <span id="order-risk-badge" class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">1.5% Risk</span>
+                        </div>
+
+                        <!-- Risk Presets -->
+                        <div class="grid grid-cols-4 gap-1 text-[10px] font-mono">
+                            <button type="button" onclick="applyOrderRisk(1.0)" id="risk-btn-10" class="py-1 rounded bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-700 transition">1.0%</button>
+                            <button type="button" onclick="applyOrderRisk(1.5)" id="risk-btn-15" class="py-1 rounded bg-emerald-500/20 text-emerald-400 font-bold border border-emerald-500/40 transition">1.5%</button>
+                            <button type="button" onclick="applyOrderRisk(2.5)" id="risk-btn-25" class="py-1 rounded bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-700 transition">2.5%</button>
+                            <button type="button" onclick="applyOrderRisk(0.0)" id="risk-btn-custom" class="py-1 rounded bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-700 transition">Custom</button>
+                        </div>
+
+                        <!-- SL & TP Inputs -->
+                        <div class="grid grid-cols-2 gap-2 pt-1 text-xs font-mono">
+                            <div>
+                                <label class="text-[10px] text-rose-400 block mb-0.5">Stop-Loss (₹)</label>
+                                <input id="order-sl" oninput="recalcCustomRR()" type="number" step="0.05" class="w-full bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1 text-rose-300 font-mono text-xs">
+                            </div>
+                            <div>
+                                <label class="text-[10px] text-emerald-400 block mb-0.5">Target (₹)</label>
+                                <input id="order-target" oninput="recalcCustomRR()" type="number" step="0.05" class="w-full bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1 text-emerald-300 font-mono text-xs">
+                            </div>
+                        </div>
+
+                        <div id="rr-summary-bar" class="text-[10px] text-zinc-400 flex justify-between font-mono pt-1 border-t border-zinc-800/60">
+                            <span>R:R: <b id="rr-val" class="text-white">1:2.0</b></span>
+                            <span>Risk: <b id="risk-val" class="text-rose-400">₹0.00</b></span>
+                            <span>Target: <b id="reward-val" class="text-emerald-400">₹0.00</b></span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-2 pt-1">
+                    <button onclick="placeManualOrder('BUY')" class="w-full py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 font-bold text-white text-xs transition shadow-lg shadow-emerald-950/40">
+                        BUY ORDER
+                    </button>
+                    <button onclick="placeManualOrder('SELL')" class="w-full py-2.5 rounded-lg bg-rose-600 hover:bg-rose-500 font-bold text-white text-xs transition shadow-lg shadow-rose-950/40">
+                        SELL ORDER
+                    </button>
+                </div>
+                <p class="text-[11px] text-zinc-500 text-center">Orders route live to MegaBull REST API.</p>
+            </div>
+
+            <!-- OpenDashboards™ Natural Language AI Copilot Assistant -->
+            <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-5 flex flex-col space-y-3">
+                <div class="flex items-center justify-between border-b border-zinc-800 pb-3">
+                    <div class="flex items-center gap-2">
+                        <span class="text-base">✨</span>
+                        <h2 class="font-bold text-white text-sm">OpenDashboards AI Copilot</h2>
+                    </div>
+                    <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-400 border border-indigo-500/30">AI Active</span>
+                </div>
+
+                <!-- Chat History Window -->
+                <div id="copilot-history" class="flex-1 min-h-[220px] max-h-[270px] overflow-y-auto space-y-2.5 font-sans text-xs bg-zinc-950 border border-zinc-800/80 rounded-lg p-3">
+                    <div class="bg-zinc-900/80 border border-zinc-800 rounded-lg p-2.5 text-zinc-300 space-y-1">
+                        <div class="text-[10px] font-mono font-bold text-indigo-400 flex items-center gap-1">
+                            <span>🤖</span> Copilot Assistant
+                        </div>
+                        <p class="leading-relaxed">
+                            Welcome to <b>OpenDashboards™</b>. Ask me to evaluate any stock, explain signals, or provide an audit of Day 2 performance.
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Suggestion Chips -->
+                <div class="flex flex-wrap gap-1 text-[10px] font-mono">
+                    <button type="button" onclick="sendQuickPrompt('Day 2 performance summary')" class="px-2 py-0.5 rounded bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-700 transition">📊 Day 2 Audit</button>
+                    <button type="button" onclick="sendQuickPrompt('Analyze RELIANCE')" class="px-2 py-0.5 rounded bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-700 transition">⚡ Analyze RELIANCE</button>
+                    <button type="button" onclick="sendQuickPrompt('Evaluate TCS')" class="px-2 py-0.5 rounded bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-700 transition">🧠 Evaluate TCS</button>
+                    <button type="button" onclick="sendQuickPrompt('Check portfolio cash and risk')" class="px-2 py-0.5 rounded bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-700 transition">💼 Cash & Risk</button>
+                </div>
+
+                <!-- Prompt Input Bar -->
+                <div class="flex gap-1.5 pt-1">
+                    <input id="copilot-input" onkeydown="if(event.key==='Enter') submitCopilot();" type="text" placeholder="Ask Copilot (e.g. 'Analyze INFY')..." class="flex-1 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-indigo-500 font-mono">
+                    <button type="button" onclick="submitCopilot()" class="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs transition">
+                        Send
+                    </button>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- Client-Side Real-Time Script -->
+    <script src="/static/js/dashboard.js"></script>
+</body>
+</html>

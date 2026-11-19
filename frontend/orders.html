@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quant_Bot | Executed Orders & Realized P&L</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        zinc: {
+                            950: '#09090b',
+                            900: '#18181b',
+                            850: '#202024',
+                            800: '#27272a',
+                            700: '#3f3f46',
+                        },
+                        emerald: { 500: '#10b981', 400: '#34d399' },
+                        rose: { 500: '#f43f5e', 400: '#fb7185' }
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace']
+                    }
+                }
+            }
+        }
+    </script>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body class="min-h-screen flex flex-col font-sans antialiased text-sm">
+
+    <!-- Top Navigation Bar -->
+    <header class="border-b border-zinc-800 bg-zinc-900/90 backdrop-blur sticky top-0 z-50 px-6 py-3.5 flex items-center justify-between">
+        <div class="flex items-center gap-6">
+            <div class="flex items-center gap-3">
+                <span class="text-xl">⚡</span>
+                <div>
+                    <h1 class="text-base font-bold tracking-tight text-white flex items-center gap-2">
+                        QUANT_BOT <span class="text-xs px-2 py-0.5 rounded bg-zinc-800 text-zinc-300 font-mono">v2.4 PRO</span>
+                    </h1>
+                    <p class="text-xs text-zinc-400">Order Audit Trail & Realized Profit / Loss Ledger</p>
+                </div>
+            </div>
+
+            <nav class="hidden md:flex items-center gap-1 font-medium text-xs">
+                <a href="/" class="px-3 py-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition flex items-center gap-1.5 border border-transparent hover:border-zinc-700">
+                    <span>📊</span> Trading Station
+                </a>
+                <a href="/orders" class="px-3 py-1.5 rounded-lg bg-zinc-800 text-white font-semibold flex items-center gap-1.5 border border-zinc-700">
+                    <span>📜</span> Orders & P&L
+                </a>
+            </nav>
+        </div>
+
+        <div class="flex items-center gap-4">
+            <div id="mode-badge" class="px-3 py-1 rounded-full text-xs font-mono font-medium bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 flex items-center gap-1.5">
+                <span class="w-2 h-2 rounded-full bg-emerald-400 pill-pulse"></span>
+                <span id="mode-text">MEGABULL CONNECTED</span>
+            </div>
+            <a href="/" class="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs text-zinc-200 border border-zinc-700 transition flex items-center gap-1.5">
+                <span>←</span> Back to Dashboard
+            </a>
+            <div id="current-clock" class="text-xs font-mono text-zinc-400">--:--:-- IST</div>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <main class="flex-1 p-6 space-y-6 max-w-7xl mx-auto w-full">
+
+        <!-- 1. Executive P&L KPI Strip -->
+        <section class="grid grid-cols-2 md:grid-cols-5 gap-4">
+            <!-- Net Realized P&L -->
+            <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
+                <span class="text-xs font-medium text-zinc-400">Net Realized P&L</span>
+                <div id="kpi-net-pnl" class="text-2xl font-bold font-mono mt-1 text-white">₹0.00</div>
+                <div id="kpi-pnl-breakdown" class="text-[11px] text-zinc-500 mt-1">₹0.00 Profit / ₹0.00 Loss</div>
+            </div>
+
+            <!-- Win Rate -->
+            <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
+                <span class="text-xs font-medium text-zinc-400">Win Rate (Closed)</span>
+                <div id="kpi-win-rate" class="text-2xl font-bold font-mono text-white mt-1">0.0%</div>
+                <div id="kpi-win-ratio" class="text-[11px] text-zinc-500 mt-1">0 Wins / 0 Losses</div>
+            </div>
+
+            <!-- Total Taxes & Brokerage -->
+            <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
+                <span class="text-xs font-medium text-zinc-400">Taxes & Brokerage Charges</span>
+                <div id="kpi-taxes" class="text-2xl font-bold font-mono text-zinc-300 mt-1">₹0.00</div>
+                <div class="text-[11px] text-zinc-500 mt-1">STT, Exchange & Turnover</div>
+            </div>
+
+            <!-- Total Trades Executed -->
+            <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
+                <span class="text-xs font-medium text-zinc-400">Total Executed Orders</span>
+                <div id="kpi-total-orders" class="text-2xl font-bold font-mono text-white mt-1">0</div>
+                <div id="kpi-orders-breakdown" class="text-[11px] text-zinc-500 mt-1">0 Buys | 0 Sells</div>
+            </div>
+
+            <!-- Account Cash Balance -->
+            <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
+                <span class="text-xs font-medium text-zinc-400">Available Liquid Cash</span>
+                <div id="kpi-cash" class="text-2xl font-bold font-mono text-emerald-400 mt-1">₹0.00</div>
+                <div class="text-[11px] text-zinc-500 mt-1">Ready for deployment</div>
+            </div>
+        </section>
+
+        <!-- 2. Interactive Navigation, Tabs, Filter Pills & Search -->
+        <section class="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
+            <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-zinc-800 pb-4">
+                <!-- Source Tabs -->
+                <div class="flex items-center gap-2">
+                    <button id="tab-ledger" onclick="switchTab('ledger')" class="px-3.5 py-1.5 rounded-lg text-xs font-medium bg-zinc-800 text-white border border-zinc-700 transition flex items-center gap-1.5">
+                        <span>📘</span> System Ledger & P&L (<span id="count-ledger">0</span>)
+                    </button>
+                    <button id="tab-megabull" onclick="switchTab('megabull')" class="px-3.5 py-1.5 rounded-lg text-xs font-medium text-zinc-400 hover:text-white hover:bg-zinc-800/60 transition flex items-center gap-1.5">
+                        <span>☁️</span> MegaBull Cloud Orders (<span id="count-megabull">0</span>)
+                    </button>
+                </div>
+
+                <!-- Search & Export -->
+                <div class="flex items-center gap-3">
+                    <div class="relative">
+                        <input id="search-input" oninput="applyFilters()" type="text" placeholder="Search symbol or order ID..." class="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-white placeholder-zinc-500 font-mono focus:outline-none focus:border-zinc-600 w-56 md:w-64" />
+                    </div>
+                    <button onclick="exportCSV()" class="px-3 py-1.5 rounded-lg bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-400 border border-emerald-500/30 text-xs font-medium transition flex items-center gap-1.5">
+                        <span>📥</span> Export CSV
+                    </button>
+                    <button onclick="fetchOrders()" class="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-medium border border-zinc-700 transition flex items-center gap-1.5">
+                        <span>🔄</span> Refresh
+                    </button>
+                </div>
+            </div>
+
+            <!-- Filter Pills (for Ledger tab) -->
+            <div id="filter-pills-bar" class="flex flex-wrap items-center gap-2">
+                <span class="text-xs text-zinc-500 font-medium mr-1">Filter By:</span>
+                <button onclick="setFilter('ALL')" id="filter-all" class="px-2.5 py-1 rounded-full text-xs font-mono font-medium bg-zinc-700 text-white border border-zinc-600 transition">
+                    All (<span id="pill-count-all">0</span>)
+                </button>
+                <button onclick="setFilter('PROFIT')" id="filter-profit" class="px-2.5 py-1 rounded-full text-xs font-mono font-medium text-zinc-400 hover:bg-zinc-800 border border-zinc-800 transition">
+                    🟢 In Profit (<span id="pill-count-profit">0</span>)
+                </button>
+                <button onclick="setFilter('LOSS')" id="filter-loss" class="px-2.5 py-1 rounded-full text-xs font-mono font-medium text-zinc-400 hover:bg-zinc-800 border border-zinc-800 transition">
+                    🔴 In Loss (<span id="pill-count-loss">0</span>)
+                </button>
+                <button onclick="setFilter('SELL')" id="filter-sell" class="px-2.5 py-1 rounded-full text-xs font-mono font-medium text-zinc-400 hover:bg-zinc-800 border border-zinc-800 transition">
+                    📦 Sells / Square-Offs (<span id="pill-count-sell">0</span>)
+                </button>
+                <button onclick="setFilter('BUY')" id="filter-buy" class="px-2.5 py-1 rounded-full text-xs font-mono font-medium text-zinc-400 hover:bg-zinc-800 border border-zinc-800 transition">
+                    📥 Buys / Entries (<span id="pill-count-buy">0</span>)
+                </button>
+            </div>
+
+            <!-- Orders Table Container -->
+            <div class="overflow-x-auto">
+                <!-- 1. System Ledger Table -->
+                <table id="table-ledger" class="w-full text-left font-mono text-xs">
+                    <thead>
+                        <tr class="text-zinc-400 border-b border-zinc-800 pb-2">
+                            <th class="py-2.5 px-3 font-semibold">Date & Time (IST)</th>
+                            <th class="py-2.5 px-3 font-semibold">Order ID</th>
+                            <th class="py-2.5 px-3 font-semibold">Symbol</th>
+                            <th class="py-2.5 px-3 font-semibold">Side</th>
+                            <th class="py-2.5 px-3 font-semibold">Style</th>
+                            <th class="py-2.5 px-3 font-semibold text-right">Qty</th>
+                            <th class="py-2.5 px-3 font-semibold text-right">Price</th>
+                            <th class="py-2.5 px-3 font-semibold text-right">Gross Value</th>
+                            <th class="py-2.5 px-3 font-semibold text-right">Charges</th>
+                            <th class="py-2.5 px-3 font-semibold text-right">Realized P&L</th>
+                            <th class="py-2.5 px-3 font-semibold text-right">ROI %</th>
+                            <th class="py-2.5 px-3 font-semibold text-center">Outcome</th>
+                            <th class="py-2.5 px-3 font-semibold">Strategy Trigger / Notes</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tbody-ledger" class="divide-y divide-zinc-800/60">
+                        <tr><td colspan="13" class="py-8 text-center text-zinc-500">Loading executed orders...</td></tr>
+                    </tbody>
+                </table>
+
+                <!-- 2. MegaBull Cloud Orders Table -->
+                <table id="table-megabull" class="w-full text-left font-mono text-xs hidden">
+                    <thead>
+                        <tr class="text-zinc-400 border-b border-zinc-800 pb-2">
+                            <th class="py-2.5 px-3 font-semibold">Order ID</th>
+                            <th class="py-2.5 px-3 font-semibold">Created Time</th>
+                            <th class="py-2.5 px-3 font-semibold">Instrument</th>
+                            <th class="py-2.5 px-3 font-semibold">Type</th>
+                            <th class="py-2.5 px-3 font-semibold">Duration</th>
+                            <th class="py-2.5 px-3 font-semibold text-right">Quantity</th>
+                            <th class="py-2.5 px-3 font-semibold text-right">Execution Price</th>
+                            <th class="py-2.5 px-3 font-semibold text-right">Total Value</th>
+                            <th class="py-2.5 px-3 font-semibold text-center">Exchange Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tbody-megabull" class="divide-y divide-zinc-800/60">
+                        <tr><td colspan="9" class="py-8 text-center text-zinc-500">Loading MegaBull cloud orders...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <footer class="border-t border-zinc-800/80 py-4 px-6 text-center text-xs text-zinc-500">
+        Quant_Bot Systematic Trading Station • Orders & Profit/Loss Audit Trail • Real-Time Ledger Sync
+    </footer>
+
+    <script src="/static/js/orders.js"></script>
+</body>
+</html>
