@@ -37,8 +37,9 @@ class AutoPilotConfig:
     end_time_str: str = "14:30"            # Daily new entry cutoff (HH:MM IST) - stops entries within 50m of square-off
     square_off_time_str: str = "15:20"     # Mandatory intraday square-off time (HH:MM IST)
     risk_per_trade_pct: float = 1.5        # Max risk budget per trade
-    max_active_positions: int = 3          # Max concurrent open intraday positions
+    max_active_positions: int = 3          # Max concurrent open positions
     min_confidence: float = 0.65           # Minimum signal confidence to trigger order
+    trading_style: str = "INTRADAY"        # "INTRADAY" (auto-exit 3:20 PM) or "DELIVERY" (Long-term / CNC)
 
     def __post_init__(self):
         # Enforce minimum frequency requirement of 10 minutes
@@ -180,6 +181,13 @@ class IntradayAutoPilot:
 
         if current_t < t_start:
             return False, f"Pre-Market: Trading window opens at {self.config.start_time_str} IST"
+
+        if self.config.trading_style == "DELIVERY":
+            # Delivery / Long-Term positions do not square off at 3:20 PM
+            if current_t >= time(15, 25):
+                return False, "Market Closing: Past 15:25 IST daily window."
+            return True, "Within Active Delivery Trading Window"
+
         if current_t >= t_sq:
             return False, f"Post-Market: Past mandatory square-off time ({self.config.square_off_time_str} IST)"
         if current_t >= t_end:
@@ -259,8 +267,8 @@ class IntradayAutoPilot:
             "actions": [],
         }
 
-        # 1. Check Mandatory Square-off
-        if self.is_past_square_off(ist_now):
+        # 1. Check Mandatory Square-off (Intraday only)
+        if self.config.trading_style == "INTRADAY" and self.is_past_square_off(ist_now):
             closed = self.square_off_all_intraday(price_lookup_func)
             results["status"] = "SQUARED_OFF"
             results["squared_off_count"] = len(closed)
@@ -305,24 +313,25 @@ class IntradayAutoPilot:
             self._log("AUTOPILOT", "WINDOW", 0.0, 1.0, "SKIPPED", f"Cycle #{self.cycle_count}: Outside trading window ({reason})")
             return results
 
-        # 4. Check Available Intraday Budget & Position Slots
-        current_intraday_positions = sum(
-            1 for p in self.portfolio.holdings.values() if p.get("trading_style") == "INTRADAY"
+        # 4. Check Available Budget & Position Slots
+        style = self.config.trading_style
+        current_active_positions = sum(
+            1 for p in self.portfolio.holdings.values() if p.get("trading_style") == style
         )
-        available_slots = self.config.max_active_positions - current_intraday_positions
+        available_slots = self.config.max_active_positions - current_active_positions
 
         if available_slots <= 0:
             results["status"] = f"MAX_POSITIONS_REACHED ({self.config.max_active_positions})"
-            self._log("AUTOPILOT", "HOLDINGS", 0.0, 1.0, "SKIPPED", f"Cycle #{self.cycle_count}: All {self.config.max_active_positions} slots occupied ({current_intraday_positions} open intraday)")
+            self._log("AUTOPILOT", "HOLDINGS", 0.0, 1.0, "SKIPPED", f"Cycle #{self.cycle_count}: All {self.config.max_active_positions} slots occupied ({current_active_positions} open {style.lower()})")
             return results
 
-        # Capital available for auto-pilot = allocated_capital - current invested in intraday
-        current_intraday_invested = sum(
+        # Capital available for auto-pilot = allocated_capital - current invested in style
+        current_invested = sum(
             p["quantity"] * p.get("current_price", p["avg_price"])
             for p in self.portfolio.holdings.values()
-            if p.get("trading_style") == "INTRADAY"
+            if p.get("trading_style") == style
         )
-        remaining_budget = max(0.0, self.config.allocated_capital - current_intraday_invested)
+        remaining_budget = max(0.0, self.config.allocated_capital - current_invested)
 
         # Cap by available paper cash (or live MegaBull cash if connected)
         available_cash = self.portfolio.cash
@@ -339,7 +348,7 @@ class IntradayAutoPilot:
             results["status"] = "INSUFFICIENT_ALLOCATED_CAPITAL"
             self._log(
                 "AUTOPILOT", "BUDGET_CAP", 0.0, 1.0, "SKIPPED",
-                f"Cycle #{self.cycle_count}: Budget cap ₹{self.config.allocated_capital:,.0f} utilized (₹{current_intraday_invested:,.0f} in active positions, ₹{remaining_budget:,.0f} remaining < ₹5,000 min)"
+                f"Cycle #{self.cycle_count}: Budget cap ₹{self.config.allocated_capital:,.0f} utilized (₹{current_invested:,.0f} in active positions, ₹{remaining_budget:,.0f} remaining < ₹5,000 min)"
             )
             return results
 
@@ -378,10 +387,10 @@ class IntradayAutoPilot:
                 investment_amount=per_trade_investment,
                 risk_percent=self.config.risk_per_trade_pct,
                 entry_price=entry_p,
-                stop_loss_price=sl_p,
-                target_price=tp_p,
+                stop_loss_price=sl_p if style == "INTRADAY" else None,
+                target_price=tp_p if style == "INTRADAY" else None,
                 order_type="MARKET",
-                trading_style="INTRADAY",
+                trading_style=style,
             )
 
             if err:

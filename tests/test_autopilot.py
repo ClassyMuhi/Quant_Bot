@@ -98,3 +98,43 @@ def test_autopilot_mandatory_square_off(tmp_path):
     assert len(closed) == 1
     assert "TCS" not in port.holdings
     assert port.realized_pnl > 400.0  # Profitable close
+
+
+def test_autopilot_delivery_mode_execution(tmp_path):
+    acc_file = tmp_path / "autopilot_delivery.json"
+    port = PaperPortfolio(account_file=acc_file, initial_cash=100000.0)
+
+    cfg = AutoPilotConfig(
+        allocated_capital=50000.0,
+        frequency_minutes=10,
+        start_time_str="00:00",
+        end_time_str="23:59",
+        square_off_time_str="23:59",
+        min_confidence=0.50,
+        max_active_positions=2,
+        trading_style="DELIVERY",
+    )
+    pilot = IntradayAutoPilot(config=cfg, portfolio=port)
+
+    # Verify trading window for delivery does not cut off at 14:30
+    mid_afternoon = datetime(2024, 1, 15, 14, 45, 0)
+    can_enter, reason = pilot.is_within_trading_window(mid_afternoon)
+    assert can_enter is True
+    assert "Delivery" in reason
+
+    # Directly add a DELIVERY holding
+    port.apply_trade(
+        symbol="HDFCBANK",
+        side="BUY",
+        quantity=5,
+        executed_price=1500.0,
+        taxes_and_charges=10.0,
+        trading_style="DELIVERY",
+    )
+    assert "HDFCBANK" in port.holdings
+    assert port.holdings["HDFCBANK"]["trading_style"] == "DELIVERY"
+
+    # Square-off must NOT close DELIVERY positions
+    closed = pilot.square_off_all_intraday(price_lookup_func=lambda s: 1550.0)
+    assert len(closed) == 0
+    assert "HDFCBANK" in port.holdings  # Preserved long-term!

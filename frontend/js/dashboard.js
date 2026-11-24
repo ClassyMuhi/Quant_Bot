@@ -111,10 +111,11 @@ let currentIsRunning = false;
         async function updateApConfig() {
             const cap = parseFloat(document.getElementById('ap-capital-select').value);
             const slots = parseInt(document.getElementById('ap-slots-select').value);
+            const style = document.getElementById('ap-style-select') ? document.getElementById('ap-style-select').value : 'INTRADAY';
             await fetch('/api/autopilot/config', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ allocated_capital: cap, max_active_positions: slots })
+                body: JSON.stringify({ allocated_capital: cap, max_active_positions: slots, trading_style: style })
             });
             fetchState();
         }
@@ -221,6 +222,10 @@ let currentIsRunning = false;
                 const slotsSelect = document.getElementById('ap-slots-select');
                 if (slotsSelect && ap.config.max_active_positions && document.activeElement !== slotsSelect) {
                     slotsSelect.value = String(parseInt(ap.config.max_active_positions));
+                }
+                const styleSelect = document.getElementById('ap-style-select');
+                if (styleSelect && ap.config.trading_style && document.activeElement !== styleSelect) {
+                    styleSelect.value = ap.config.trading_style;
                 }
             }
 

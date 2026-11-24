@@ -172,6 +172,7 @@ async def api_state(request):
                 "allocated_capital": pilot.config.allocated_capital,
                 "min_confidence": pilot.config.min_confidence,
                 "max_active_positions": pilot.config.max_active_positions,
+                "trading_style": pilot.config.trading_style,
             }
         }
     })
@@ -188,10 +189,14 @@ async def api_autopilot_config(request):
         pilot.config.min_confidence = float(data["min_confidence"])
     if "max_active_positions" in data:
         pilot.config.max_active_positions = int(data["max_active_positions"])
+    if "trading_style" in data:
+        style = str(data["trading_style"]).strip().upper()
+        if style in ["INTRADAY", "DELIVERY"]:
+            pilot.config.trading_style = style
 
     log_activity(
         "AUTOPILOT", "CONFIG",
-        f"Risk settings updated: {pilot.config.risk_per_trade_pct}% risk/trade | Capital: ₹{pilot.config.allocated_capital:,.0f} | Max Pos: {pilot.config.max_active_positions}"
+        f"Settings updated: {pilot.config.trading_style} mode | {pilot.config.risk_per_trade_pct}% risk/trade | Capital: ₹{pilot.config.allocated_capital:,.0f} | Max Pos: {pilot.config.max_active_positions}"
     )
     return JSONResponse({
         "status": "success",
@@ -200,6 +205,7 @@ async def api_autopilot_config(request):
             "allocated_capital": pilot.config.allocated_capital,
             "min_confidence": pilot.config.min_confidence,
             "max_active_positions": pilot.config.max_active_positions,
+            "trading_style": pilot.config.trading_style,
         }
     })
 
